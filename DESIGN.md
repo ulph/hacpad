@@ -1,24 +1,23 @@
-# hacpad Design: Plugin SDK and Control Providers
+# hacpad Design: Host-Agnostic Semantic Control
 
 This design centers on three cooperating pieces:
 
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
-- **Plugin endpoint**: the plugin provider that exposes semantic surface descriptions, plugin-private actions, rich gesture handling, and high-rate feedback.
+- **Semantic provider**: a portable, host-agnostic contract that describes plugin control surfaces, actions, gestures, and rich feedback.
 - **Controller runtime**: the runtime/provider router that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
-The host and plugin endpoints are both capability providers, while the controller runtime is the orchestrator that keeps host-aware parameter changes safe and still allows richer plugin-driven behavior.
+The host and semantic providers are both capability providers. The controller runtime orchestrates safe host-aware parameter changes while still allowing rich semantic behavior.
 
-## Plugin SDK split
-The SDK should be split into two complementary surfaces.
-This split is deliberately host-agnostic: a host without a native plugin SDK can still consume the same plugin-layer semantics through mapping files, sidecar metadata, or external provider adapters.
+## Semantic mapping layer
+The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
 
 1. **Declarative surface description**
-   - `plugin.describeControllerSurface()` describes how the plugin wants to appear on controllers.
+   - A `describeControllerSurface()` contract describes how a plugin or mapping wants to appear on controllers.
    - It returns pages, slots, labels, conditions, enums, gestures, meters, preferred controls, and other metadata.
 
-2. **Live control endpoint**
-   - `plugin.controllerEndpoint()` exposes a realtime-ish command/event channel.
-   - This channel is for semantic control, feedback, and plugin-private actions.
+2. **Live control channel (optional)**
+   - `controllerEndpoint()` exposes a realtime-ish command/event channel when a plugin directly supports it.
+   - For hosts without a native plugin endpoint, the same semantics can still be delivered by host-side actions and mapping-driven gesture routing.
 
 ### Declarative metadata example
 ```cpp
@@ -67,10 +66,10 @@ The ownership split is critical:
   - canonical parameter values
   - offline render correctness
 
-- **Plugin endpoint owns**:
+- **Plugin semantics layer owns**:
   - rich gestures
   - semantic actions
-  - high-rate feedback
+  - high-rate feedback when available
   - non-parameter UI state
   - contextual mappings
   - custom browser/actions
@@ -105,14 +104,14 @@ The host endpoint should support:
 - host-visible state notifications such as track/device/focus changes
 - reactive updates for parameter/automation state
 
-The host and plugin endpoints are complementary:
+The host endpoint and semantic provider are complementary:
 - host endpoint = DAW/project-aware lane for canonical parameters, transport, mixer, and track-level control
-- plugin endpoint = semantic/private/enrichment lane for plugin-specific surface descriptions, actions, gestures, and rich feedback
+- semantic provider = host-agnostic lane for surface descriptions, actions, gestures, and rich feedback
 
-The runtime should not treat the plugin endpoint as special. Both provider types can offer describe/subscribe/begin/adjust/set/invoke/end capabilities.
+The runtime should not treat the semantic provider as special. Both provider types can offer describe/subscribe/begin/adjust/set/invoke/end capabilities.
 
 ## Provider model
-The runtime should treat DAW/host, plugin, and user/third-party endpoints as capability providers.
+The runtime should treat DAW/host and semantic providers as capability providers.
 Hosts without a native plugin SDK can still participate by offering the same semantics through mappings, sidecar files, or an adapter layer.
 
 ```
@@ -125,12 +124,12 @@ Controller runtime
 │  ├─ invoke DAW actions
 │  ├─ browse presets if supported
 │  └─ receive reactive updates
-└─ Plugin endpoint
+└─ Semantic provider
    ├─ describe semantic pages
    ├─ format values
-   ├─ invoke plugin-private actions
-   ├─ provide high-rate feedback
-   ├─ expose mapping-based surface semantics for non-SDK hosts
+   ├─ invoke semantic actions
+   ├─ provide high-rate feedback when available
+   ├─ support mapping-only host integration
    └─ receive reactive updates
 ```
 
