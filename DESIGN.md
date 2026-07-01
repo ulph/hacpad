@@ -13,6 +13,8 @@ When both host-level and plugin-layer communication are available, host-level SD
 
 Host vs plugin capability resolution should be negotiated via versioning and capability metadata, so the runtime can choose the most authoritative source and fall back cleanly.
 
+Our design goal is also to ensure the out-of-box experience with our provided DAW add-ons is as consistent as possible.
+
 Supporting roles:
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
 - **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
