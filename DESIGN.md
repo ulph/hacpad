@@ -298,3 +298,23 @@ Suggested route preferences:
 Do not encode plugin intelligence only in DAW scripts.
 Do not encode controller intelligence only in plugin SDKs.
 Put semantic intelligence in portable mapping files.
+
+## Research topics
+### Vendor-specific runtime accommodation
+- AKAI VIP: investigate whether VIP can expose an external control interface or mapping bridge that the runtime can drive, and whether it can be extended from the OS-level sidecar rather than only from a VIP host plugin.
+- Nektar Panorama: research Panorama's integration API and whether its custom host templates or MIDI/DAW mappings can be generated or driven from the sidecar runtime while preserving its proprietary layout semantics.
+- Komplete Kontrol: determine how Komplete Kontrol exposes DAW/host integration (e.g. via NKS, DAW templates, or host scripts) and what runtime-level hooks are needed to synchronize Komplete Kontrol's own browser/transport/mapping state with our controller runtime.
+
+### Runtime communication model
+The runtime should be able to communicate with each integration path through explicit channels and fallbacks:
+- Plugin SDK channel: used when a plugin is present and can provide mapping markup, rich semantics, and custom actions. This channel should support describe/subscribe/begin/adjust/set/invoke/end and should expose enough metadata for the runtime to merge plugin-driven mappings with host state.
+- Host SDK channel: used when the DAW provides a native controller integration API. This channel should expose canonical parameter writes, transport/navigation, mixer and track state, action invocation, and host-aware notifications.
+- Host add-on channel: used when the DAW exposes an external extension or add-on mechanism. This channel may be less standardized and should be treated as an adapter layer that translates host add-on callbacks/events into the runtime's capability provider model.
+
+### Communication constraints
+- Versioning and capability negotiation: every channel must advertise version and capability metadata so the runtime can choose the best authoritative source and fall back when a newer capability is absent.
+- Conflict resolution: the runtime must decide which provider owns each control target, especially when plugin and host both expose the same parameter or action.
+- Latency and rate: host SDK and plugin SDK communication should support both command and high-rate feedback paths, but the runtime must gracefully degrade on hosts that only offer lower-rate updates.
+- Process separation: the runtime is a separate OS-level process, so inter-process transport must be reliable, authenticated, and able to multiplex multiple DAW instances or host sessions.
+- Free-form host adapter support: host add-ons may expose only partial or custom semantics, so the runtime must allow free-form mappings and explicit vendor-specific extensions while preserving the portable mapping contract.
+- Consistency: out-of-box controller experience should remain consistent by preferring host SDK integration when available, with plugin mappings or host add-on adapters as fallback sources.
