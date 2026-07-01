@@ -168,7 +168,7 @@ The plugin-layer SDK may declare custom mappings, but those mappings are still m
 
 Hardware only needs one integration path: either the DAW host SDK or the plugin-layer SDK. In either case, the mapping markup is the shared contract that describes how the controller should behave.
 
-A dedicated **sidecar process** is required to make this architecture make sense. The sidecar should run as a separate OS-level process, acting as the bridge between controller hardware and the runtime, abstracting transport details, handling firmware/protocol versions, and enabling host or plugin transport negotiation.
+A dedicated **sidecar process** is required to make this architecture make sense. The sidecar should run as a separate OS-level process and perform the actual communication to/from hardware. It should own the implementation drivers that connect the sidecar runtime to the physical controller and relay host/plugin events to the hardware.
 
 Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or controller runtime choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
 
