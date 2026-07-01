@@ -14,7 +14,7 @@ Supporting pieces:
 - **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
 - **Controller runtime**: the runtime/provider router that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
-The host and semantic providers are both capability providers. The controller runtime orchestrates safe host-aware parameter changes while still allowing rich semantic behavior.
+The host and semantic providers are both capability providers. The controller runtime is intended to run as a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
 
 ## Semantic mapping layer
 The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
@@ -151,7 +151,7 @@ The plugin-layer SDK may declare custom mappings, but those mappings are still m
 
 Hardware only needs one integration path: either the DAW host SDK or the plugin-layer SDK. In either case, the mapping markup is the shared contract that describes how the controller should behave.
 
-A dedicated **sidecar process** is recommended to manage this hardware communication. The sidecar can act as the bridge between controller hardware and the runtime, abstracting transport details, handling firmware/protocol versions, and enabling host or plugin transport negotiation.
+A dedicated **sidecar process** is required to make this architecture make sense. The sidecar should run as a separate OS-level process, acting as the bridge between controller hardware and the runtime, abstracting transport details, handling firmware/protocol versions, and enabling host or plugin transport negotiation.
 
 Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or controller runtime choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
 
