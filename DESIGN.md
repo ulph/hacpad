@@ -320,13 +320,25 @@ The runtime should be able to communicate with each integration path through exp
 - Plugin SDK channel: used when a plugin is present and can provide mapping markup, rich semantics, and custom actions. This channel should support describe/subscribe/begin/adjust/set/invoke/end and should expose enough metadata for the runtime to merge plugin-driven mappings with host state.
 - Host integration channel: used when the DAW provides a native controller integration API or when a host add-on is available. This channel should expose canonical parameter writes, transport/navigation, mixer and track state, action invocation, and host-aware notifications. Host add-ons may share this channel but only implement a subset of host capabilities due to DAW-specific constraints.
 
+The runtime-to-hardware bridge should also expose open-ended primitives, letting host/plugin-originated intent pass through the runtime to hardware and back again. This means the bridge and the runtime should support:
+- generic primitive commands such as `control`, `query`, `subscribe`, `announce`, and `feedback`
+- extensible metadata so a bridge can declare support for a specific feature, capability, or high-rate path
+- a feature negotiation phase to let runtime, host/plugin, and bridge agree on supported primitives before active control begins
+- a fallback model when hardware bridges only support a reduced feature set or vendor-specific extensions
+
 ### Communication constraints
 - Versioning and capability negotiation: every channel must advertise version and capability metadata so the runtime can choose the best authoritative source and fall back when a newer capability is absent.
 - Conflict resolution: the runtime must decide which provider owns each control target, especially when plugin and host both expose the same parameter or action.
 - Latency and rate: host SDK and plugin SDK communication should support both command and high-rate feedback paths, but the runtime must gracefully degrade on hosts that only offer lower-rate updates.
 - Process separation: the runtime is a separate OS-level process, so inter-process transport must be reliable, authenticated, and able to multiplex multiple DAW instances or host sessions.
 - Free-form host adapter support: host add-ons may expose only partial or custom semantics, so the runtime must allow free-form mappings and explicit vendor-specific extensions while preserving the portable mapping contract.
+- Bridge feature declaration: hardware bridges should be able to declare support for named features and capabilities so the runtime can route controls through supported primitives and avoid unsupported paths.
 - Consistency: out-of-box controller experience should remain consistent by preferring host SDK integration when available, with plugin mappings or host add-on adapters as fallback sources.
+
+### Bridge support research
+- Research how runtime-to-hardware bridges can expose a feature declaration API and whether this should be a generic capability list, a versioned protocol, or a plugin/host-driven extension system.
+- Explore open-ended primitives for bridges, such as raw control forwarding, state query/subscribe, feedback channels, and event announcements, to support both standard and custom hardware workflows.
+- Investigate how feature negotiation can be made explicit so runtime, host/plugin, and hardware bridges can agree on supported semantics before control surfaces are instantiated.
 
 ### DAW-specific integration research
 - FL Studio: investigate FL Studio's native controller scripting and MIDI remote support, and whether the sidecar can drive templates or mappings through wrapper scripts and shared state.
