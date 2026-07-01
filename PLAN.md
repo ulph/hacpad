@@ -14,10 +14,13 @@ Provide a small, extensible project that lets users map physical controls to plu
 - Define a two-tier semantic contract for scalar parameter mappings and deeper plugin-only state semantics.
 - Treat runtime-to-hardware bridges as extensible community/vendor extension points with feature declaration.
 
-## Design-driven priorities
-- Document host/plugin integration channels and shared runtime semantics.
+## Design-derived priorities (from DESIGN.md)
+- Define the two-tier semantic contract: scalar parameter mappings plus deeper plugin-only state semantics.
+- Document the shared runtime integration channel for host SDK/add-on and the plugin semantic provider.
 - Research DAW-specific host add-on/sdk constraints for FL Studio, Bitwig, Ableton Live, Reaper, and custom/web hosts.
-- Define a transport-agnostic bridge model that supports USB, MIDI, or intermediate protocols.
+- Define transport-agnostic runtime-to-bridge support, since bridges may use USB, MIDI, or intermediate transports.
+- Treat runtime-to-hardware bridges as extension points for community contributors and hardware vendors.
+- Define feature declaration and capability negotiation for bridge and provider support.
 - Define a conflict-resolution and multi-DAW instance strategy for the runtime.
 
 ## Hardware Abstraction Layer (HAL)
