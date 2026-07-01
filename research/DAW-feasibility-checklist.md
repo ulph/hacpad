@@ -17,118 +17,126 @@ Template (answer each item per-DAW):
 ---
 
 ## Bitwig Studio
-- Persistent process capability: Yes — Bitwig supports JavaScript-based controller scripts which run persistently while the host is open.
-- IPC options: Controller scripts run inside Bitwig's process (JVM). External IPC typically done via network sockets/OSC from scripts or via an external bridge; confirm official support for outbound sockets.
-- Plugin sandboxing and permissions: Controller scripts are run in host scripting API; VST/AU plugins are separate and sandboxed as usual.
-- Hardware access: Controller scripts can receive/send MIDI; direct USB access from the host script is limited — use OS MIDI drivers or a bridge.
-- Extension API completeness: Rich controller API exposing tracks, devices, parameters, transport, and observer APIs.
-- Versioning and update model: Controller scripts packaged with Bitwig or installed into the controller scripts folder; updating requires replacing script files or packaging updates.
-- Multi-instance handling: Bitwig runs per-user instance; coordinating multiple DAW instances requires external sidecar or scripts that detect/multiplex instances.
-- Performance/latency constraints: Scripting is not real-time audio thread — suitable for control paths; high-rate feedback may need a dedicated bridge.
-- Security/stability concerns: Scripts run in the Bitwig scripting environment; misbehaving scripts can affect the host.
-- Notes / next verification steps: Confirm whether controller scripts can open outbound TCP/UDP sockets reliably (community examples exist). Link: Bitwig Controller API docs (verify).
+- Persistent process capability: Yes — Bitwig provides a controller API (controller scripts) that runs while the host is open; scripts can maintain state and subscriptions for the controller surface lifecycle.
+- IPC options: Controller scripts run inside Bitwig's scripting host; common approaches for external communication are: OS-level MIDI ports, OSC or TCP/UDP to a local helper (if scripting language allows sockets). Treat external sockets as host-dependent — verify with current Bitwig docs.
+- Plugin sandboxing and permissions: VST/AU plugins are sandboxed normally; controller scripts execute in Bitwig's scripting environment and are constrained by the API.
+- Hardware access: Controller scripts use OS MIDI drivers for hardware; direct raw USB access from inside the script is not typical. For advanced device access (firmware update, HID), use a companion sidecar/bridge.
+- Extension API completeness: High for control-surface workflows: transport, tracks, devices, parameter observers, and user action hooks exist — sufficient for Tier 1 mappings and many Tier 2 semantics when the plugin exposes them.
+- Versioning and update model: Scripts are installed to Bitwig's controller scripts folder or packaged; updates are file-based and generally require a restart of the host to reload scripts.
+- Multi-instance handling: No built-in cross-instance coordination; use external sidecar to multiplex or coordinate multiple Bitwig instances.
+- Performance/latency constraints: Scripting is not on the audio thread — appropriate for control-rate interactions. For very high-rate telemetry, prefer a native sidecar with a high-rate feedback channel.
+- Security/stability concerns: Faulty scripts can affect the host process; prefer conservative operations and isolate heavy I/O to external helpers.
+- Notes / next verification steps: Confirm current Bitwig scripting language capabilities for opening outbound sockets; collect examples of community controller scripts that do IPC.
 
 ## Ableton Live
-- Persistent process capability: Yes — Live supports persistent Python MIDI Remote Scripts; Max for Live (M4L) provides additional extension capabilities inside Live Suite.
-- IPC options: Python Remote Scripts are embedded; direct network access from the Python environment is historically limited/undocumented. Max for Live can use externals to reach sockets/OSC.
-- Plugin sandboxing and permissions: VST/AU plugins are sandboxed; Remote Scripts run within Live and have restricted APIs.
-- Hardware access: Remote Scripts and M4L can send/receive MIDI; direct USB device access is not provided — use OS MIDI routing or dedicated bridge.
-- Extension API completeness: Remote Scripts provide many control surface primitives (parameters, transport, tracks); M4L can access clip/device state but requires Suite.
-- Versioning and update model: Remote Scripts are installed to Live's User Library or system folders; updates require replacing scripts and may need Live restart.
-- Multi-instance handling: Live typically runs single instance per user; coordination across instances needs external sidecar.
-- Performance/latency constraints: MIDI Remote Scripts are not real-time audio threads, but provide responsive control; high-rate streaming may be limited.
-- Security/stability concerns: Python environment restrictions vary by Live version; M4L can run user code (with its own sandboxing) — test for stability.
-- Notes / next verification steps: Verify what networking primitives are available from Remote Scripts in the current Live version; test M4L externals for OSC sockets.
+- Persistent process capability: Yes — Live provides Python-based MIDI Remote Scripts for control surfaces; these run while Live is running and maintain state.
+- IPC options: Remote Scripts are embedded and historically limited in direct network access; Max for Live (M4L) can provide additional IPC via Max externals (OSC, UDP/TCP) when Live Suite is available. External sidecars commonly integrate via virtual MIDI ports or a small helper communicating over sockets.
+- Plugin sandboxing and permissions: VST/AU plugins are sandboxed; Remote Scripts have a host-provided API with limited low-level access. M4L devices run inside Live but operate within Max's environment.
+- Hardware access: MIDI I/O via OS drivers is available to Remote Scripts/M4L; raw USB/HID access requires an external process or Max externals with native code.
+- Extension API completeness: Remote Scripts provide comprehensive control-surface primitives (tracks, devices, parameters, transport); M4L exposes device/clip data inside Live Suite.
+- Versioning and update model: Scripts are file-based and require host reload/restart to take effect; distribution via packages or user Library.
+- Multi-instance handling: Live doesn't provide cross-instance coordination; external sidecar required for multiplexing.
+- Performance/latency constraints: Control-rate operations are supported; host scripting is not on audio thread so use sidecar for sub-millisecond or high-rate feedback.
+- Security/stability concerns: Python scripts and M4L devices can affect Live stability if they block or misbehave; isolate heavy I/O to external helpers.
+- Notes / next verification steps: Validate current Live version's Remote Script networking capabilities and test a simple Remote Script <-> sidecar via virtual MIDI + TCP.
 
 ## FL Studio
-- Persistent process capability: Yes — FL Studio supports controller scripts (Python-based) for persistent controller mappings.
-- IPC options: Scripting runs inside FL Studio; external IPC commonly uses MIDI or network-to-MIDI bridges; direct socket support from scripts requires verification.
-- Plugin sandboxing and permissions: VSTs/AU are sandboxed normally; controller scripts operate in the host scripting environment.
-- Hardware access: Controller scripts can use OS MIDI drivers; direct USB access is not typical from scripts.
-- Extension API completeness: FL's MIDI scripting exposes transport and parameter mapping; completeness varies vs other DAWs.
-- Versioning and update model: Scripts are installed into FL's MIDI Scripts folder; updating requires replacing files and restarting FL.
-- Multi-instance handling: Multiple FL instances need external coordination via a sidecar.
-- Performance/latency constraints: Scripting not suitable for hard real-time; acceptable for control UI.
-- Security/stability concerns: Scripting errors can affect FL's scripting host.
-- Notes / next verification steps: Collect samples of FL Python scripts that open sockets (if any) and test feasibility.
+- Persistent process capability: Yes — FL Studio includes a Python-based controller scripting system that runs while the host is open.
+- IPC options: Scripts run inside FL; common integration patterns use virtual MIDI ports or external helpers; direct socket access from FL scripts is uncommon and should be verified per FL version.
+- Plugin sandboxing and permissions: VST/AU sandboxing applies; controller scripts are constrained to the host scripting API.
+- Hardware access: MIDI via OS drivers is supported; raw USB/HID access requires an external companion process.
+- Extension API completeness: Provides MIDI mapping and transport hooks; API surface is smaller than Live/Bitwig but sufficient for many controller mappings.
+- Versioning and update model: Scripts are file-based and require restart to reload.
+- Multi-instance handling: Not built-in — use an external sidecar for coordination.
+- Performance/latency constraints: Scripting is control-rate only; use sidecar for high-rate telemetry.
+- Security/stability concerns: Avoid heavy I/O in scripts; delegate to external helpers.
+- Notes / next verification steps: Test a simple Python script + helper pattern using virtual MIDI to validate latency and reliability.
 
 ## Reaper
-- Persistent process capability: Yes — Reaper is extremely extensible; ReaScript (Lua/Python/EEL) and native extensions can be long-running.
-- IPC options: Reaper supports OSC, TCP/UDP, and ReaScript can call OS-level calls (subject to scripting language capabilities). ReaPack and ReaScripts can be used to coordinate external processes.
-- Plugin sandboxing and permissions: Reaper is permissive; extensions can access filesystem and network depending on script language.
-- Hardware access: Reaper can send/receive MIDI; extensions can often access OS-level features; embedding a bridge is generally feasible.
-- Extension API completeness: Very complete — track/device/parameter/transport APIs are accessible via ReaScript and native extensions.
-- Versioning and update model: Scripts and extensions are installed per-user; ReaPack simplifies distribution/updates.
-- Multi-instance handling: Multiple instances are possible; coordination may be possible via OSC or external sidecar.
-- Performance/latency constraints: ReaScript runs outside audio thread (unless native extension); high-rate paths possible via native extensions.
-- Security/stability concerns: Native extensions may crash host; use careful isolation.
-- Notes / next verification steps: Reaper is a prime candidate for embedded adapters — prototype a small ReaScript adapter that communicates with a local sidecar.
+- Persistent process capability: Yes — Reaper provides ReaScript (Lua/Python/EEL) and an SDK for native extensions; scripts and extensions can run persistently and are well-suited for adapters.
+- IPC options: Strong: OSC, TCP/UDP, and direct OS calls from scripts (depending on language) are supported. Reaper's extensibility makes it easy to integrate external helpers via OSC/UDP/TCP and virtual MIDI.
+- Plugin sandboxing and permissions: Reaper is permissive compared to other DAWs; scripting languages have OS access consistent with their runtime.
+- Hardware access: MIDI and system-level access for extensions is available; native extensions can access more low-level APIs if needed.
+- Extension API completeness: Very complete — provides track/device/parameter/transport APIs and observer hooks; ideal for both Tier 1 and many Tier 2 semantics when plugin exposes state.
+- Versioning and update model: Scripts/extensions are user-installable; ReaPack simplifies distribution and updates.
+- Multi-instance handling: Reaper supports multiple instances; coordination via OSC or a sidecar is feasible.
+- Performance/latency constraints: Native extensions can achieve low latency; scripting is not on audio thread unless using native modules.
+- Security/stability concerns: Native code can crash host — isolate risky operations; prefer a sidecar for hardware drivers or heavy IO.
+- Notes / next verification steps: Prioritize Reaper for an embedded-adapter prototype (ReaScript) communicating to a sidecar via OSC/TCP.
 
 ## Logic Pro (macOS)
-- Persistent process capability: Limited — Control Surface support exists but third-party persistent add-ons are constrained; no general-purpose embedded scripting like Reaper.
-- IPC options: CoreMIDI and macOS IPC (XPC, sockets) are available to external helpers, but embedding inside Logic is limited.
-- Plugin sandboxing and permissions: AU/VST plugins run sandboxed with restrictions; Apple's security model limits arbitrary hardware access from plugins.
-- Hardware access: Use CoreMIDI/CoreAudio; direct USB access from logic-internal scripts is not a typical extension point.
-- Extension API completeness: Control Surface SDK and MIDI Learn exist but are narrower than full scripting APIs.
-- Versioning and update model: Control Surface drivers and plugins updated via installers; tight platform integration complicates live updates.
-- Multi-instance handling: macOS typically runs one Logic instance; coordination across instances rarely needed.
-- Performance/latency constraints: Audio thread constraints apply; embedding risks host stability.
-- Security/stability concerns: Apple policies and sandboxing reduce embedding feasibility — prefer external sidecar on macOS.
-- Notes / next verification steps: Investigate Apple's Control Surface SDK details and whether third-party adapters can run as persistent helpers alongside Logic.
+- Persistent process capability: Limited — Logic exposes Control Surface integrations, but lacks a general persistent scripting host for third parties comparable to Reaper.
+- IPC options: External helpers can use CoreMIDI, CoreAudio, sockets or XPC; embedding functionality inside Logic is constrained by Apple's ecosystem and Logic's plugin model.
+- Plugin sandboxing and permissions: AU and third-party plugins run under Apple's plugin policies and sandboxing; direct hardware access from plugins is limited.
+- Hardware access: CoreMIDI/CoreAudio are the supported paths; raw USB/HID access usually must be performed by an external helper process.
+- Extension API completeness: Control Surface SDK provides targeted control-surface hooks but is narrower than Reaper/Bitwig/Ableton scripting.
+- Versioning and update model: Drivers and plugins updated via installers; control-surface scripts are delivered by vendors and may require signing on macOS.
+- Multi-instance handling: Rarely needed; external sidecar is the practical approach for multiplexing.
+- Performance/latency constraints: Embedding risks host stability; prefer sidecar for high-rate tasks.
+- Security/stability concerns: Apple platform security and signing increase complexity for embedding; external signed helpers recommended.
+- Notes / next verification steps: Review Apple's Control Surface docs and CoreMIDI examples for building companion helpers.
 
 ## Cubase / Nuendo
-- Persistent process capability: Cubase supports Controller APIs and Generic Remote mappings; scripting/embedded adapters are more limited and vendor-specific.
-- IPC options: Typically MIDI/Generic Remote; external adapters via MIDI or proprietary APIs (e.g., Steinberg extensions) may exist.
-- Plugin sandboxing and permissions: Standard VST/AU restrictions; controller integrations typically run as configured mappings.
-- Hardware access: Via OS MIDI drivers; direct USB from inside host unlikely.
-- Extension API completeness: Controller APIs exist but vary by Cubase version; check Steinberg docs for developer SDKs.
-- Versioning and update model: Controller scripts and templates updated via file installs or SDK-provided installers.
-- Multi-instance handling: Multiple instances coordination requires external sidecar.
-- Performance/latency constraints: Controller templates are adequate for UI mapping; deep integration may be limited.
-- Security/stability concerns: Using vendor SDKs may be required; check licensing/SDK access.
-- Notes / next verification steps: Collect Steinberg controller API docs and community examples.
+- Persistent process capability: Moderate — Cubase provides controller APIs and Generic Remote mappings; deep embedded scripting is less common and often vendor-specific.
+- IPC options: Primarily MIDI/Generic Remote; some vendor SDKs enable richer IPC but typically require Steinberg SDK access.
+- Plugin sandboxing and permissions: Standard VST/AU restrictions apply; dedicated controller integrations are handled via the controller API.
+- Hardware access: Via OS MIDI drivers; raw USB access from inside the host is unlikely.
+- Extension API completeness: Varies by version; consult Steinberg developer docs for specific capabilities.
+- Versioning and update model: File-based templates or SDK installers; vendor partnerships may be required for advanced integrations.
+- Multi-instance handling: External sidecar recommended for coordination.
+- Performance/latency constraints: Controller templates suitable for control UI; high-rate paths are better handled by an external sidecar.
+- Security/stability concerns: May require SDK licensing for deep integration.
+- Notes / next verification steps: Obtain Steinberg developer docs and sample controller integrations.
 
 ## Pro Tools
-- Persistent process capability: Limited — Pro Tools uses AAX plugins and dedicated control surface integrations (E.g., EUCON) but third-party embedding is constrained.
-- IPC options: Typically hardware control via EuCon or HUI; vendor SDKs may be required.
-- Plugin sandboxing and permissions: AAX plugins are restricted; embedding runtime inside Avid host is unlikely.
-- Hardware access: Control surfaces via supported protocols; direct USB/hardware access from within Pro Tools is constrained.
-- Extension API completeness: Not as open as other DAWs; vendor relationships often required for deep integration.
-- Versioning and update model: Enterprise-style installers and strict compatibility requirements.
-- Multi-instance handling: Not commonly addressed; external sidecar recommended.
-- Performance/latency constraints: Real-time constraints and AAX sandboxing important.
-- Security/stability concerns: High — incompatible code can destabilize large studio environments.
-- Notes / next verification steps: Evaluate EUCON and Avid partner SDK options if vendor integration is needed.
+- Persistent process capability: Limited — deep third-party extension points are constrained; control-surface integrations are typically via established protocols (EUCON, HUI) or vendor partnerships.
+- IPC options: EuCon or HUI for control surfaces; proprietary vendor SDKs for advanced integrations.
+- Plugin sandboxing and permissions: AAX plugin model and Avid's policies restrict arbitrary embedding; partner programs often required for deep integration.
+- Hardware access: Control surfaces supported via approved protocols; raw hardware access inside Pro Tools is uncommon.
+- Extension API completeness: Not as open as other DAWs; expect to rely on vendor protocols or partnership SDKs.
+- Versioning and update model: Strict compatibility and installer-based updates; coordinate closely with Avid practices.
+- Multi-instance handling: External sidecar recommended.
+- Performance/latency constraints: Real-time and compatibility constraints are strict.
+- Security/stability concerns: High; avoid embedding untrusted native code inside the host.
+- Notes / next verification steps: Investigate EUCON partner program and vendor SDK availability if Pro Tools integration is required.
 
 ## Studio One
-- Persistent process capability: Studio One supports extensions and remote control (Amazon/OSC style integrations) to an extent, but third-party persistent embedding is limited compared to Reaper.
-- IPC options: MIDI, OSC, and remote APIs where available; confirm current SDK offerings from PreSonus.
-- Plugin sandboxing and permissions: Standard VST/AU restrictions.
-- Hardware access: Via OS MIDI; direct USB within host is uncommon.
-- Extension API completeness: Moderate; check PreSonus SDK/docs for details.
-- Versioning and update model: Extensions updated via installers or package managers provided by vendor.
-- Multi-instance handling: External sidecar recommended for multi-instance coordination.
-- Performance/latency constraints: Acceptable for control surfaces; real-time paths better handled by sidecar/native extensions.
-- Security/stability concerns: Use vendor SDKs when possible.
-- Notes / next verification steps: Review Studio One's Remote API and developer docs.
+- Persistent process capability: Moderate — Studio One provides remote control APIs and some extension points, but not as open as Reaper.
+- IPC options: MIDI, OSC, and vendor SDKs where available; verify current PreSonus developer offerings.
+- Plugin sandboxing and permissions: Standard VST/AU behaviour applies.
+- Hardware access: Via OS MIDI; raw USB/HID access requires a companion helper.
+- Extension API completeness: Moderate — sufficient for many control-surface mappings but limited for deep embedding.
+- Versioning and update model: Vendor-managed installers and updates; use vendor tools for distribution.
+- Multi-instance handling: Use external sidecar for coordination.
+- Performance/latency constraints: Control-rate operations supported; low-latency native paths require sidecar or native modules.
+- Security/stability concerns: Prefer vendor SDKs for deep work.
+- Notes / next verification steps: Fetch PreSonus SDK/docs and sample remote integrations.
 
 ## Web / Browser-based hosts
-- Persistent process capability: Browser pages are ephemeral; persistent adapters must be external services or browser extensions.
-- IPC options: WebSockets, WebMIDI, WebUSB where supported, postMessage, and Service Workers for limited persistence.
-- Plugin sandboxing and permissions: Browsers strongly sandbox hardware access; WebMIDI/WebUSB require user permission and browser support.
-- Hardware access: WebMIDI/WebUSB available in modern browsers with user permission; reliability varies across browsers/OS.
-- Extension API completeness: Highly variable; embedding runtime into browser-hosted DAW requires bridge via WebSocket or native companion app.
-- Versioning and update model: Web deployments update centrally; browser extension/update cycles apply.
-- Multi-instance handling: Browser tabs/hosts can be multiplexed via a central sidecar or signaling server.
-- Performance/latency constraints: Network and browser event loop introduces latency; not ideal for high-rate feedback without native helpers.
-- Security/stability concerns: Browser permissions and user prompts; recommend external native helper for reliable hardware access.
-- Notes / next verification steps: Prototype a companion sidecar that exposes a WebSocket + WebMIDI fallback.
+- Persistent process capability: Limited — browser pages are transient; persistence requires either a service worker (limited) or an external native companion / server.
+- IPC options: WebSocket, WebRTC, WebMIDI, WebUSB (where supported), and postMessage; reliability and permissions vary by browser and OS.
+- Plugin sandboxing and permissions: Browsers enforce user consent for hardware APIs; WebMIDI/WebUSB require explicit user approval and are limited in capability.
+- Hardware access: WebMIDI/WebUSB can access MIDI and USB devices in modern browsers with permission; for consistent hardware support, a native sidecar is recommended.
+- Extension API completeness: Varies; web-hosted DAWs should offer a documented API (if any) — otherwise use a companion sidecar.
+- Versioning and update model: Centralized for web apps; browser extension updates follow store policies.
+- Multi-instance handling: Use a central sidecar or signaling server to coordinate multiple browser tabs or hosts.
+- Performance/latency constraints: Browser event loop and network latency limit high-rate telemetry; native helpers provide better performance.
+- Security/stability concerns: Browser permissions and CORS/security model limit direct hardware access; use secure, consent-driven flows.
+- Notes / next verification steps: Prototype a companion sidecar + WebSocket bridge and test WebMIDI fallbacks across major browsers.
 
 ---
 
 ## Vendor / Host Add-on Notes (examples)
-- Komplete Kontrol / Native Instruments: integration primarily via host templates, NKS, and plugin/host bridges; investigate SDKs and template distribution.
-- AKAI VIP, Nektar Panorama: vendor-specific host integrations often expose custom templates or mappings; treat as adapter targets rather than general embedding platforms.
+## Vendor / Host Add-on Notes (examples)
+- Komplete Kontrol / Native Instruments: integration primarily via NKS, host templates, and plugin/host bridges. Deep sync may require vendor cooperation or template generation.
+- AKAI VIP, Nektar Panorama: vendor-specific integrations often expose custom templates/mappings and proprietary protocols; treat them as target adapters and approach via vendor SDKs or template generation.
+
+---
+
+## Verification plan and sources to fetch
+- For each DAW above, fetch and cite the official developer docs (controller API, scripting guides, SDK pages) and 2-3 community examples or forum posts that demonstrate practical adapter patterns.
+- Prioritize verification for: Reaper, Bitwig, Ableton Live, and web hosts (highest ROI for prototypes).
+
 
 ---
 
