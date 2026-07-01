@@ -1,20 +1,22 @@
 # hacpad Design: Host-Agnostic Semantic Control
 
-This design centers on two big pieces:
+This design centers on two core pieces:
 
-- **Mapping markup**: the portable description of how DAW/plugin parameters, actions, gestures, and feedback map to actual controller hardware.
+- **Mapping markup**: the portable description of how DAW/plugin parameters, actions, gestures, and feedback map to actual controller hardware. This is the semantic contract that is shared across hosts, plugins, and external maps.
 - **Hardware communication**: the transport path between software and controller hardware, which can be delivered either through a host-level SDK or through a plugin-layer SDK.
 
-When both are available, host-level SDK integration takes precedence. The plugin layer can still declare custom mappings, but those mappings are always expressed as markup and can be sourced externally to the plugin.
+These are the two main axes: what the controller should do, and how the controller is actually driven.
+
+When both host-level and plugin-layer communication are available, host-level SDK integration takes precedence. The plugin layer can still declare custom mappings, but those mappings are always expressed as markup and can be sourced externally to the plugin.
 
 Host vs plugin capability resolution should be negotiated via versioning and capability metadata, so the runtime can choose the most authoritative source and fall back cleanly.
 
-Supporting pieces:
+Supporting roles:
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
 - **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
-- **Controller runtime**: the runtime/provider router that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
+- **Controller runtime**: the separate OS-level sidecar process that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
-The host and semantic providers are both capability providers. The controller runtime is intended to run as a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
+The host and semantic providers are both capability providers. The controller runtime is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
 
 ## Semantic mapping layer
 The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
