@@ -28,6 +28,9 @@ Core software components:
 5. **Runtime-to-hardware bridge**: the transport layer that connects the sidecar to actual controller hardware.
 6. **Mapping markup format**: the portable schema that describes the controller surface and semantics.
 
+For a plugin to work, the minimum required component is the mapping markup format.
+For DAW-level integration, the host must provide either a host SDK or host add-ons (component 2 or 3).
+
 The host and semantic providers are both capability providers. The controller runtime is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
 
 ## Semantic mapping layer
