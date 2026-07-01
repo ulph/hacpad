@@ -318,3 +318,10 @@ The runtime should be able to communicate with each integration path through exp
 - Process separation: the runtime is a separate OS-level process, so inter-process transport must be reliable, authenticated, and able to multiplex multiple DAW instances or host sessions.
 - Free-form host adapter support: host add-ons may expose only partial or custom semantics, so the runtime must allow free-form mappings and explicit vendor-specific extensions while preserving the portable mapping contract.
 - Consistency: out-of-box controller experience should remain consistent by preferring host SDK integration when available, with plugin mappings or host add-on adapters as fallback sources.
+
+### DAW-specific integration research
+- FL Studio: investigate FL Studio's native controller scripting and MIDI remote support, and whether the sidecar can drive templates or mappings through wrapper scripts and shared state.
+- Bitwig: research Bitwig's controller API and JavaScript-based controller scripts, which may offer a strong host SDK path and a good model for sidecar integration via external scripts or adapters.
+- Ableton Live: determine how Live's Python MIDI Remote Scripts and Max for Live devices can be used as host add-ons or adapter layers to surface runtime mappings and transport/state events.
+- Reaper: assess Reaper's extensibility through ReaScript, JSFX, and extension APIs, which may allow a flexible host add-on approach or a lightweight bridge from the runtime to host state.
+- Custom/web-based hosts: consider browser-based DAW-style environments or web-hosted control panels, focusing on how the runtime can communicate with them through WebSockets, Web MIDI, browser extensions, or embedded JavaScript adapters.
