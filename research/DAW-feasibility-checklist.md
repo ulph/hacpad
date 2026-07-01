@@ -52,6 +52,28 @@ Template (answer each item per-DAW):
 - Security/stability concerns: Avoid heavy I/O in scripts; delegate to external helpers.
 - Notes / next verification steps: Test a simple Python script + helper pattern using virtual MIDI to validate latency and reliability.
 
+### Practical integration patterns and prototype steps (FL Studio)
+- Recommended pattern (robust): external sidecar + FL controller script
+	- Use FL's Python controller script for UI mapping and subscriptions; delegate hardware driver duties to an external sidecar that owns USB/HID and exposes a virtual MIDI port to FL.
+	- Sidecar responsibilities: device firmware/transport, HID handling, high-rate telemetry aggregation, capability negotiation with runtime, and exposing a TCP/WebSocket control channel for UI/bridge tooling.
+	- FL responsibilities: controller script maps UI controls to host parameters and forwards high-level intents to the sidecar via the virtual MIDI port or via a small TCP helper process that the script can call.
+
+- Lightweight pattern (when device is MIDI-only): virtual MIDI loop
+	- Use loopMIDI (Windows) or IAC Driver (macOS) to create virtual MIDI ports; hardware -> sidecar -> virtual MIDI -> FL script.
+
+- Prototype steps
+	1. Create a minimal FL Python controller script that listens on a named virtual MIDI port and maps simple controls (e.g., knob -> volume) using FL's script API.
+ 2. Implement a small sidecar (Node.js/Python/Go) that opens the hardware device, exposes it as a virtual MIDI port, and forwards a compact JSON-over-TCP control channel for additional metadata.
+ 3. Validate end-to-end: hardware -> sidecar -> virtual MIDI -> FL script -> parameter change, and test feedback path (parameter change -> FL -> script -> sidecar -> hardware LED).
+ 4. Measure latency and adjust batching or use higher-rate channel on sidecar if needed.
+
+- Tools & notes
+	- Windows: loopMIDI, rtpMIDI for networked setups.
+	- macOS: IAC Driver for virtual MIDI; use CoreMIDI in sidecar.
+	- Use user-space MIDI routing libraries (e.g., `mido` for Python, `web-midi`/`midi` node modules) for rapid prototyping.
+
+---
+
 ## Reaper
 - Persistent process capability: Yes — Reaper provides ReaScript (Lua/Python/EEL) and an SDK for native extensions; scripts and extensions can run persistently and are well-suited for adapters.
 - IPC options: Strong: OSC, TCP/UDP, and direct OS calls from scripts (depending on language) are supported. Reaper's extensibility makes it easy to integrate external helpers via OSC/UDP/TCP and virtual MIDI.
@@ -123,6 +145,43 @@ Template (answer each item per-DAW):
 - Performance/latency constraints: Browser event loop and network latency limit high-rate telemetry; native helpers provide better performance.
 - Security/stability concerns: Browser permissions and CORS/security model limit direct hardware access; use secure, consent-driven flows.
 - Notes / next verification steps: Prototype a companion sidecar + WebSocket bridge and test WebMIDI fallbacks across major browsers.
+
+### Web use case (we control client source) — recommended approaches
+When we control the client source, the web-hosted DAW case becomes flexible: prefer direct hardware access via browser APIs where possible, and fall back to a companion native sidecar when needed.
+
+- Primary (pure-web) approach: WebMIDI / WebUSB / WebHID
+	- Use WebMIDI for MIDI-capable devices (supported in Chromium-based browsers and Opera; Safari support varies). Requires user permission and secure origin (HTTPS or localhost).
+	- For non-MIDI HID devices, use WebHID or WebUSB where available. These APIs require explicit user interaction and permission but allow direct device access without a native helper.
+	- Use Service Workers and IndexedDB to persist controller presets and connection state where applicable.
+
+- Hybrid approach (recommended for full reliability)
+	- Provide a native companion sidecar (Electron, Node, or lightweight Rust/Go binary) that exposes a local WebSocket/TCP API and a WebSocket handshake from the web client (localhost) to the sidecar.
+	- Sidecar responsibilities: claim exclusive USB/HID when necessary, expose a WebMIDI-like API over WebSocket, handle firmware updates, and advertise capabilities to the web client.
+	- The web client negotiates features with the sidecar on startup and falls back to WebMIDI/WebUSB if the sidecar is absent.
+
+- Message model (compact proposal)
+	- `announce`: sidecar -> client: {id, name, capabilities: ["midi","hid","high-rate"]}
+	- `negotiate`: client -> sidecar: {desired: ["midi","high-rate"]}
+	- `control`: client -> sidecar: {target, value, ts}
+	- `subscribe`: client -> sidecar: {target}
+	- `feedback`: sidecar -> client: {target, value, ts}
+
+- Prototype steps (web-first, full-control assumption)
+	1. Build a minimal web client that uses WebMIDI to enumerate devices and maps a simple control to a UI element.
+ 2. Implement a sidecar that exposes the same message model over WebSocket and bridges to physical HID when WebMIDI is insufficient.
+ 3. Add capability negotiation: client prefers sidecar high-rate channel, falls back to WebMIDI/WebUSB if unavailable.
+ 4. Test across Chrome, Edge, and Firefox (Firefox requires enabling WebMIDI via flags historically); test macOS, Windows, Linux differences.
+
+- Security & UX notes
+	- Browsers require user gestures to open WebUSB/WebHID; design onboarding flows to guide permission granting.
+	- Use `localhost` + HTTPS or loopback negotiation (e.g., open a short-lived WebSocket with an ephemeral token) to avoid cross-origin issues.
+
+---
+
+## Next verification actions (FL + Web)
+- FL Studio: implement the prototype steps above (FL controller script + sidecar) and record latency, reliability, and any script API limitations.
+- Web: implement a minimal WebMIDI client and a sidecar WebSocket bridge; validate capability negotiation and fallback logic across browsers.
+
 
 ---
 
