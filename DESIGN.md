@@ -340,6 +340,7 @@ The runtime-to-hardware bridge should also expose open-ended primitives, letting
 - Research how runtime-to-hardware bridges can expose a feature declaration API and whether this should be a generic capability list, a versioned protocol, or a plugin/host-driven extension system.
 - Explore open-ended primitives for bridges, such as raw control forwarding, state query/subscribe, feedback channels, and event announcements, to support both standard and custom hardware workflows.
 - Investigate how feature negotiation can be made explicit so runtime, host/plugin, and hardware bridges can agree on supported semantics before control surfaces are instantiated.
+- Treat bridges as an extension point for community contributors and hardware vendors, allowing custom bridge implementations to be added without changing the core runtime.
 
 ### DAW-specific integration research
 - FL Studio: investigate FL Studio's native controller scripting and MIDI remote support, and whether the sidecar can drive templates or mappings through wrapper scripts and shared state.
