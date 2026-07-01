@@ -22,12 +22,14 @@ The host and semantic providers are both capability providers. The controller ru
 The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
 The mapping markup is the core contract, and it can be sourced from the plugin, from external sidecars, or from the host.
 
+Integration can be implemented in any host-supported environment, such as JavaScript, C++, Max for Live, or other host-specific extension systems. The design must respect each DAW's extension limitations.
+
 1. **Declarative surface description**
    - A `describeControllerSurface()` contract describes how a plugin or mapping wants to appear on controllers.
    - It returns pages, slots, labels, conditions, enums, gestures, meters, preferred controls, and other metadata.
 
 ### Declarative metadata example
-```cpp
+```text
 plugin.describeControllerSurface();
 ```
 Returns:
@@ -43,7 +45,7 @@ Returns:
 - dynamic slot selection rules
 
 ### Live endpoint example
-```cpp
+```text
 plugin.controllerEndpoint();
 ```
 Allows:
