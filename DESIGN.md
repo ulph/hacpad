@@ -23,7 +23,7 @@ Supporting roles:
 Core software components:
 1. **Plugin SDK**: enriches plugin-host communication with semantic descriptions and custom mappings.
 2. **Host SDK**: provides the native DAW integration path for hardware-aware controller support.
-3. **Host add-ons**: host-specific extension modules or add-ons that expose integration paths for external parties, but may only be able to realize a subset of host capabilities due to DAW-specific constraints.
+3. **Host add-ons**: host-specific extension modules or add-ons that expose integration paths for external parties. They may share the same runtime integration channel as a host SDK but are often limited to a subset of host capabilities due to DAW-specific constraints.
 4. **Sidecar runtime app**: the OS-level process that owns mapping evaluation, routing, and the runtime state.
 5. **Runtime-to-hardware bridge**: the transport layer that connects the sidecar to actual controller hardware.
 6. **Mapping markup format**: the portable schema that describes the controller surface and semantics.
@@ -318,8 +318,7 @@ Put semantic intelligence in portable mapping files.
 ### Runtime communication model
 The runtime should be able to communicate with each integration path through explicit channels and fallbacks:
 - Plugin SDK channel: used when a plugin is present and can provide mapping markup, rich semantics, and custom actions. This channel should support describe/subscribe/begin/adjust/set/invoke/end and should expose enough metadata for the runtime to merge plugin-driven mappings with host state.
-- Host SDK channel: used when the DAW provides a native controller integration API. This channel should expose canonical parameter writes, transport/navigation, mixer and track state, action invocation, and host-aware notifications.
-- Host add-on channel: used when the DAW exposes an external extension or add-on mechanism. This channel may be less standardized, may only support a subset of host capabilities, and should be treated as an adapter layer that translates host add-on callbacks/events into the runtime's capability provider model.
+- Host integration channel: used when the DAW provides a native controller integration API or when a host add-on is available. This channel should expose canonical parameter writes, transport/navigation, mixer and track state, action invocation, and host-aware notifications. Host add-ons may share this channel but only implement a subset of host capabilities due to DAW-specific constraints.
 
 ### Communication constraints
 - Versioning and capability negotiation: every channel must advertise version and capability metadata so the runtime can choose the best authoritative source and fall back when a newer capability is absent.
