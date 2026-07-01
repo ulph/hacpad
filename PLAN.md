@@ -11,6 +11,14 @@ Provide a small, extensible project that lets users map physical controls to plu
 - Support application-agnostic mapping so the same physical control can work across different audio tools.
 - Enable an MVP with a clear CLI or config-driven API.
 - Ship docs, examples, and automated tests.
+- Define a two-tier semantic contract for scalar parameter mappings and deeper plugin-only state semantics.
+- Treat runtime-to-hardware bridges as extensible community/vendor extension points with feature declaration.
+
+## Design-driven priorities
+- Document host/plugin integration channels and shared runtime semantics.
+- Research DAW-specific host add-on/sdk constraints for FL Studio, Bitwig, Ableton Live, Reaper, and custom/web hosts.
+- Define a transport-agnostic bridge model that supports USB, MIDI, or intermediate protocols.
+- Define a conflict-resolution and multi-DAW instance strategy for the runtime.
 
 ## Hardware Abstraction Layer (HAL)
 - Create a HAL that decouples physical controllers from plugin/DAW actions.
