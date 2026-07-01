@@ -355,6 +355,24 @@ The runtime-to-hardware bridge should also expose open-ended primitives, letting
   - Test in at least two DAWs with different integration models (e.g., Bitwig and Ableton Live) and with one hardware bridge implementation.
   - Document findings and recommend a default architecture with clear migration and versioning strategies.
 
+#### Feasibility checklist for embedding the runtime
+When researching whether embedding the runtime into a host SDK or add-on is viable under DAW constraints, verify the following per-target DAW:
+
+- Persistent process capability: can the DAW or add-on spawn or host a long-running singleton process or service, or are add-ons limited to short-lived callbacks?
+- IPC options: does the DAW provide reliable inter-process communication (sockets, shared memory, named pipes) usable by an embedded runtime or add-on?
+- Plugin sandboxing and permissions: do plugin sandboxes prevent network/USB access or external process spawning that would block embedded bridge duties?
+- Hardware access: can an add-on or embedded component access local hardware or must communication go via the host MIDI/USB stack only?
+- Extension API completeness: does the DAW's SDK or scripting API expose the transport, mixer, track, and parameter events required for runtime semantics?
+- Versioning and update model: how are add-ons updated across DAW versions and can the embedded runtime be independently updated to avoid skew?
+- Multi-instance handling: can an embedded runtime detect and coordinate multiple DAW instances (same machine) to avoid controller conflicts?
+- Performance constraints: does embedding reduce latency sufficiently to justify losing process isolation, and are there risks of host stalls affecting runtime responsiveness?
+- Security and stability: would embedding increase crash/instability risks for the DAW or violate sandboxing/security policies of the host OS or DAW?
+
+Decision heuristics:
+- If several target DAWs lack persistent process support, reliable IPC, or hardware access for add-ons, a standalone sidecar is recommended.
+- If DAWs provide robust extension APIs, persistent scripting hosts, and safe ways to manage long-running adapters, embedding may be feasible and simpler for end users.
+- Prefer a hybrid model: support standalone sidecar as default, and allow embedded adapters where the DAW supports them safely. Always require explicit capability negotiation and version metadata.
+
 ### DAW-specific integration research
 - FL Studio: investigate FL Studio's native controller scripting and MIDI remote support, and whether the sidecar can drive templates or mappings through wrapper scripts and shared state.
 - Bitwig: research Bitwig's controller API and JavaScript-based controller scripts, which may offer a strong host SDK path and a good model for sidecar integration via external scripts or adapters.

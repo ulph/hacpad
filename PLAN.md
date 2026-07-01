@@ -42,6 +42,7 @@ Provide a small, extensible project that lets users map physical controls to plu
 - Add live mode / runtime control with a GUI or CLI.
 - Add tests, linting, and CI.
 - Publish examples and usage guides.
+- Conduct feasibility study for embedding runtime into host SDKs/add-ons (replace prototyping requirement when constrained by DAW capabilities).
 
 ## Success criteria
 - The repo contains a clear architecture and roadmap.
