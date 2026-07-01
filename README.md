@@ -4,3 +4,6 @@
 
 # hacpad
 Hardware Agnostic Control of Plugins And Daws
+
+> See `PLAN.md` for the project roadmap, goals, and next steps.
+
