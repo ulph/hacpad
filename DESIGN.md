@@ -9,7 +9,8 @@ This design centers on three cooperating pieces:
 The host and plugin endpoints are both capability providers, while the controller runtime is the orchestrator that keeps host-aware parameter changes safe and still allows richer plugin-driven behavior.
 
 ## Plugin SDK split
-The SDK should be split into two complementary surfaces:
+The SDK should be split into two complementary surfaces.
+This split is deliberately host-agnostic: a host without a native plugin SDK can still consume the same plugin-layer semantics through mapping files, sidecar metadata, or external provider adapters.
 
 1. **Declarative surface description**
    - `plugin.describeControllerSurface()` describes how the plugin wants to appear on controllers.
@@ -112,6 +113,7 @@ The runtime should not treat the plugin endpoint as special. Both provider types
 
 ## Provider model
 The runtime should treat DAW/host, plugin, and user/third-party endpoints as capability providers.
+Hosts without a native plugin SDK can still participate by offering the same semantics through mappings, sidecar files, or an adapter layer.
 
 ```
 Controller runtime
@@ -128,6 +130,7 @@ Controller runtime
    ├─ format values
    ├─ invoke plugin-private actions
    ├─ provide high-rate feedback
+   ├─ expose mapping-based surface semantics for non-SDK hosts
    └─ receive reactive updates
 ```
 
