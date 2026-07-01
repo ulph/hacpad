@@ -64,6 +64,3 @@ Provide a small, extensible project that lets users map physical controls to plu
 
 ## Conversation reference
 - Shared ChatGPT plan: https://chatgpt.com/share/e/6a44e945-5bb0-83ed-9982-6795872543d4
-
-## Next step
-Import the shared AI conversation, extract requirements, and turn them into prioritized implementation tasks.
