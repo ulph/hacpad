@@ -323,7 +323,7 @@ The runtime should be able to communicate with each integration path through exp
 The runtime-to-hardware bridge should also expose open-ended primitives, letting host/plugin-originated intent pass through the runtime to hardware and back again. This means the bridge and the runtime should support:
 - generic primitive commands such as `control`, `query`, `subscribe`, `announce`, and `feedback`
 - extensible metadata so a bridge can declare support for a specific feature, capability, or high-rate path
-- transport-agnostic support, since the on-the-wire protocol may be USB, MIDI, or anything in between
+- transport-agnostic support, since the on-the-wire protocol may be USB, MIDI, or anything in between; the exact transport is up to each bridge implementation
 - a feature negotiation phase to let runtime, host/plugin, and bridge agree on supported primitives before active control begins
 - a fallback model when hardware bridges only support a reduced feature set or vendor-specific extensions
 
