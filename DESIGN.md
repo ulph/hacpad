@@ -1,5 +1,13 @@
 # hacpad Design: Plugin SDK and Control Providers
 
+This design centers on three cooperating pieces:
+
+- **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
+- **Plugin endpoint**: the plugin provider that exposes semantic surface descriptions, plugin-private actions, rich gesture handling, and high-rate feedback.
+- **Controller runtime**: the runtime/provider router that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
+
+The host and plugin endpoints are both capability providers, while the controller runtime is the orchestrator that keeps host-aware parameter changes safe and still allows richer plugin-driven behavior.
+
 ## Plugin SDK split
 The SDK should be split into two complementary surfaces:
 
