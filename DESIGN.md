@@ -197,20 +197,6 @@ Both endpoints can implement the same control contract:
 The merge/router decides who handles each target.
 
 ## Control semantics and routing
-Command classes can describe intent:
-
-```cpp
-enum class ControlSemantics {
-  AutomatableParameter,
-  PluginPrivateState,
-  MomentaryAction,
-  NavigationAction,
-  BrowserAction,
-  GestureOnly,
-  MeterFeedback
-};
-```
-
 Binding routes declare the control path:
 
 ```yaml
@@ -224,6 +210,9 @@ slots:
     route: plugin_endpoint
     affects_project_state: true
 ```
+
+## Plugin specific extensions
+Deeper plugin-only state semantics, that the plugin drives directly.
 
 ## Mapping file as universal contract
 The mapping file is the portable semantic contract.
@@ -308,28 +297,3 @@ Suggested route preferences:
 Do not encode plugin intelligence only in DAW scripts.
 Do not encode controller intelligence only in plugin SDKs.
 Put semantic intelligence in portable mapping files.
-
-## Research tasks
-The following research topics were moved to `PLAN.md` as actionable research tasks (see `PLAN.md` > "Research tasks").
-
-*Vendor-specific runtime accommodation*
-- AKAI VIP: can VIP expose an external control interface or mapping bridge the runtime can drive; can it be extended from the OS-level sidecar vs only from a VIP host plugin?
-- Nektar Panorama: what does Panorama's integration API expose and can custom host templates or MIDI mappings be generated/driven from the sidecar runtime?
-- Komplete Kontrol: how does Komplete Kontrol integrate with DAWs (NKS, templates, host scripts) and what hooks are required to synchronize its browser/transport/mapping state with our runtime?
-
-*Runtime communication model*
-- Document expected channels (plugin SDK, host integration channel) and fallback behaviors; enumerate required control primitives and metadata for describe/subscribe/begin/adjust/set/invoke/end.
-
-*Bridge support research*
-- Define a feature declaration API for bridges (capability list vs versioned protocol vs extension system).
-- Enumerate open-ended primitives for bridges (raw control forwarding, query/subscribe, feedback channels, event announcements).
-- Specify a feature negotiation flow between runtime, host/plugin, and bridge.
-
-*Sidecar runtime research*
-- Evaluate trade-offs between standalone sidecar and embedding runtime inside host SDK/add-ons.
-- Use the feasibility checklist in `DESIGN.md` to evaluate targets and recommend a default architecture (standalone by default; embedded where safe).
-
-*DAW-specific integration research*
-- FL Studio, Bitwig, Ableton Live, Reaper, and custom/web-based hosts: gather capability matrices for add-on APIs, persistent scripting hosts, hardware/USB access, IPC options, and update/version models.
-
-(Research tasks are now tracked in `PLAN.md` under the "Research tasks" section.)
