@@ -24,6 +24,8 @@ The host and semantic providers are both capability providers. The controller ru
 The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
 The mapping markup is the core contract, and it can be sourced from the plugin, from external sidecars, or from the host.
 
+A DAW mapping layer may expose a standardized vocabulary for common semantics, but it should still allow the host to provide free-form, host-specific extensions when needed.
+
 Integration can be implemented in any host-supported environment, such as JavaScript, Max for Live, or other host-specific extension systems. For DAW authors who want a deeper native integration path, an optional C++ SDK can be provided by the host, but that is a separate host-author SDK and not required for the portable mapping contract.
 
 1. **Declarative surface description**
@@ -201,6 +203,7 @@ slots:
 ## Mapping file as universal contract
 The mapping file is the portable semantic contract.
 DAW adapters and plugin endpoints should consume the same schema.
+The DAW layer may publish a standard vocabulary for common domain concepts, while still supporting free-form mappings and host-specific vocabularies.
 
 Supported sources:
 - built into plugin
