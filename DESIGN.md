@@ -1,15 +1,22 @@
 # hacpad Design: Host-Agnostic Semantic Control
 
-This design centers on three cooperating pieces:
+This design centers on two big pieces:
 
+- **Mapping markup**: the portable description of how DAW/plugin parameters, actions, gestures, and feedback map to actual controller hardware.
+- **Hardware communication**: the transport path between software and controller hardware, which can be delivered either through a host-level SDK or through a plugin-layer SDK.
+
+When both are available, host-level SDK integration takes precedence. The plugin layer can still declare custom mappings, but those mappings are always expressed as markup and can be sourced externally to the plugin.
+
+Supporting pieces:
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
-- **Semantic provider**: a portable, host-agnostic contract that describes plugin control surfaces, actions, gestures, and rich feedback.
+- **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
 - **Controller runtime**: the runtime/provider router that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
 The host and semantic providers are both capability providers. The controller runtime orchestrates safe host-aware parameter changes while still allowing rich semantic behavior.
 
 ## Semantic mapping layer
 The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
+The mapping markup is the core contract, and it can be sourced from the plugin, from external sidecars, or from the host.
 
 1. **Declarative surface description**
    - A `describeControllerSurface()` contract describes how a plugin or mapping wants to appear on controllers.
@@ -132,6 +139,15 @@ Controller runtime
    ├─ support mapping-only host integration
    └─ receive reactive updates
 ```
+
+## Hardware communication
+Hardware integration can come from either:
+- **Host-level SDK**: the preferred path when the DAW exposes controller hardware integration directly.
+- **Plugin-layer SDK**: an alternate path when the host does not provide hardware integration.
+
+The plugin-layer SDK may declare custom mappings, but those mappings are still markup and can be sourced externally.
+
+Hardware only needs one integration path: either the DAW host SDK or the plugin-layer SDK. In either case, the mapping markup is the shared contract that describes how the controller should behave.
 
 Both endpoints can implement the same control contract:
 
