@@ -20,6 +20,14 @@ Supporting roles:
 - **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
 - **Controller runtime**: the separate OS-level sidecar process that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
+Core software components:
+1. **Plugin SDK**: enriches plugin-host communication with semantic descriptions and custom mappings.
+2. **Host SDK**: provides the native DAW integration path for hardware-aware controller support.
+3. **Host add-ons**: host-specific extension modules or add-ons that expose integration paths for external parties.
+4. **Sidecar runtime app**: the OS-level process that owns mapping evaluation, routing, and the runtime state.
+5. **Runtime-to-hardware bridge**: the transport layer that connects the sidecar to actual controller hardware.
+6. **Mapping markup format**: the portable schema that describes the controller surface and semantics.
+
 The host and semantic providers are both capability providers. The controller runtime is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
 
 ## Semantic mapping layer
