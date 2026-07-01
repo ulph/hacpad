@@ -170,6 +170,8 @@ Hardware only needs one integration path: either the DAW host SDK or the plugin-
 
 A dedicated **sidecar process** is required to make this architecture make sense. The sidecar should run as a separate OS-level process and perform the actual communication to/from hardware. It should own the implementation drivers that connect the sidecar runtime to the physical controller and relay host/plugin events to the hardware.
 
+The runtime protocol should also handle multiple DAW instances and any associated conflict resolution, even if that usage is rare.
+
 Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or controller runtime choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
 
 Both endpoints can implement the same control contract:
