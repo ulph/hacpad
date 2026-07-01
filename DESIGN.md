@@ -342,6 +342,19 @@ The runtime-to-hardware bridge should also expose open-ended primitives, letting
 - Investigate how feature negotiation can be made explicit so runtime, host/plugin, and hardware bridges can agree on supported semantics before control surfaces are instantiated.
 - Treat bridges as an extension point for community contributors and hardware vendors, allowing custom bridge implementations to be added without changing the core runtime.
 
+### Sidecar runtime research
+- Evaluate whether a separate OS-level sidecar runtime is strictly required, or if the runtime responsibilities can be embedded into host SDKs or host add-ons (spawned as a singleton by the DAW or plugin).
+- Investigate trade-offs:
+  - **Version skew risk**: multiple host-provided embedded runtime implementations may diverge, causing inconsistent behavior across DAWs and making feature rollout complex.
+  - **Process isolation benefits**: a standalone sidecar centralizes hardware driver ownership, firmware/transport handling, and can improve stability and privilege separation.
+  - **Multi-instance handling**: standalone runtimes can better multiplex multiple DAW instances and enforce global conflict resolution policies.
+  - **Latency and performance**: embedding duties in-process can reduce IPC overhead but may increase risk of host-induced stalls; measure real-world latency for control and feedback paths.
+  - **Deployment and UX**: embedding reduces install surface but complicates updates; standalone sidecars allow single-version updates and vendor-driven drivers.
+- Recommended research actions:
+  - Prototype an embedded runtime inside a host add-on and a standalone sidecar for comparison.
+  - Test in at least two DAWs with different integration models (e.g., Bitwig and Ableton Live) and with one hardware bridge implementation.
+  - Document findings and recommend a default architecture with clear migration and versioning strategies.
+
 ### DAW-specific integration research
 - FL Studio: investigate FL Studio's native controller scripting and MIDI remote support, and whether the sidecar can drive templates or mappings through wrapper scripts and shared state.
 - Bitwig: research Bitwig's controller API and JavaScript-based controller scripts, which may offer a strong host SDK path and a good model for sidecar integration via external scripts or adapters.
