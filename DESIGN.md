@@ -3,7 +3,7 @@
 This design centers on two core pieces:
 
 - **Mapping markup**: the portable description of how DAW/plugin parameters, actions, gestures, and feedback map to actual controller hardware. This is the semantic contract that is shared across hosts, plugins, and external maps.
-- **Hardware communication**: the transport path between software and controller hardware, which can be delivered either through a host-level SDK or through a plugin-layer SDK.
+- **Hardware communication**: the transport path between software and controller hardware, which can be delivered through a host-specific add-on, a host-level SDK, or through a plugin-layer SDK.
 
 These are the two main axes: what the controller should do, and how the controller is actually driven.
 
