@@ -26,10 +26,6 @@ The mapping markup is the core contract, and it can be sourced from the plugin, 
    - A `describeControllerSurface()` contract describes how a plugin or mapping wants to appear on controllers.
    - It returns pages, slots, labels, conditions, enums, gestures, meters, preferred controls, and other metadata.
 
-2. **Live control channel (optional)**
-   - `controllerEndpoint()` exposes a realtime-ish command/event channel when a plugin directly supports it.
-   - For hosts without a native plugin endpoint, the same semantics can still be delivered by host-side actions and mapping-driven gesture routing.
-
 ### Declarative metadata example
 ```cpp
 plugin.describeControllerSurface();
