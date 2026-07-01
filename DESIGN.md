@@ -7,6 +7,8 @@ This design centers on two big pieces:
 
 When both are available, host-level SDK integration takes precedence. The plugin layer can still declare custom mappings, but those mappings are always expressed as markup and can be sourced externally to the plugin.
 
+Host vs plugin capability resolution should be negotiated via versioning and capability metadata, so the runtime can choose the most authoritative source and fall back cleanly.
+
 Supporting pieces:
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
 - **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
@@ -148,6 +150,10 @@ Hardware integration can come from either:
 The plugin-layer SDK may declare custom mappings, but those mappings are still markup and can be sourced externally.
 
 Hardware only needs one integration path: either the DAW host SDK or the plugin-layer SDK. In either case, the mapping markup is the shared contract that describes how the controller should behave.
+
+A dedicated **sidecar process** is recommended to manage this hardware communication. The sidecar can act as the bridge between controller hardware and the runtime, abstracting transport details, handling firmware/protocol versions, and enabling host or plugin transport negotiation.
+
+Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or controller runtime choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
 
 Both endpoints can implement the same control contract:
 
