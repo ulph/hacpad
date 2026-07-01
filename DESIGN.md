@@ -90,37 +90,44 @@ For automatable parameters, the direct endpoint must either:
 Otherwise automation, undo, recall, and host UI sync break.
 
 ## Host endpoint component
-The host component is a first-class provider in the model. It can expose DAW-specific capabilities and react to host-visible state changes, while the plugin endpoint supplies semantic enrichment.
+The host/DAW component is a first-class provider, and its role is broader than just plugin parameter ownership.
+It also owns DAW-level control surfaces, transport, mixer state, track/device selection, and project context.
 
 The host endpoint should support:
 - canonical parameter writes and automation commits
-- selected track/device observation
-- DAW action invocation
+- host-level parameter control (track levels, send levels, mixer controls)
+- transport control and synchronization state
+- track/scene/bank navigation and selection
+- DAW action invocation (save, undo, track arming, etc.)
 - preset browsing if supported by the host
+- selected track/device observation
 - host-visible state notifications such as track/device/focus changes
 - reactive updates for parameter/automation state
 
 The host and plugin endpoints are complementary:
-- host endpoint = canonical/project-aware lane
-- plugin endpoint = semantic/private/enrichment lane
+- host endpoint = DAW/project-aware lane for canonical parameters, transport, mixer, and track-level control
+- plugin endpoint = semantic/private/enrichment lane for plugin-specific surface descriptions, actions, gestures, and rich feedback
 
 The runtime should not treat the plugin endpoint as special. Both provider types can offer describe/subscribe/begin/adjust/set/invoke/end capabilities.
 
 ## Provider model
-The runtime should treat DAW and plugin endpoints as capability providers.
+The runtime should treat DAW/host, plugin, and user/third-party endpoints as capability providers.
 
 ```
 Controller runtime
 ├─ DAW endpoint
 │  ├─ write parameter
 │  ├─ observe selected track/device
-│  ├─ invoke DAW action
+│  ├─ write mixer/track/send controls
+│  ├─ control transport and session state
+│  ├─ invoke DAW actions
 │  ├─ browse presets if supported
 │  └─ receive reactive updates
 └─ Plugin endpoint
    ├─ describe semantic pages
    ├─ format values
    ├─ invoke plugin-private actions
+   ├─ provide high-rate feedback
    └─ receive reactive updates
 ```
 
