@@ -66,6 +66,12 @@ The ownership split is critical:
   - contextual mappings
   - custom browser/actions
 
+- **Controller runtime owns**:
+  - merging provider data
+  - routing control events
+  - layout and display evaluation
+  - fallback behavior when providers do not cover a target
+
 Direct plugin control must not secretly bypass the host for automatable parameter state.
 
 For automatable parameters, the direct endpoint must either:
@@ -74,6 +80,23 @@ For automatable parameters, the direct endpoint must either:
 - mark the action as non-automatable/plugin-private.
 
 Otherwise automation, undo, recall, and host UI sync break.
+
+## Host endpoint component
+The host component is a first-class provider in the model. It can expose DAW-specific capabilities and react to host-visible state changes, while the plugin endpoint supplies semantic enrichment.
+
+The host endpoint should support:
+- canonical parameter writes and automation commits
+- selected track/device observation
+- DAW action invocation
+- preset browsing if supported by the host
+- host-visible state notifications such as track/device/focus changes
+- reactive updates for parameter/automation state
+
+The host and plugin endpoints are complementary:
+- host endpoint = canonical/project-aware lane
+- plugin endpoint = semantic/private/enrichment lane
+
+The runtime should not treat the plugin endpoint as special. Both provider types can offer describe/subscribe/begin/adjust/set/invoke/end capabilities.
 
 ## Provider model
 The runtime should treat DAW and plugin endpoints as capability providers.
