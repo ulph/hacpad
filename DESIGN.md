@@ -309,73 +309,27 @@ Do not encode plugin intelligence only in DAW scripts.
 Do not encode controller intelligence only in plugin SDKs.
 Put semantic intelligence in portable mapping files.
 
-## Research topics
-### Vendor-specific runtime accommodation
-- AKAI VIP: investigate whether VIP can expose an external control interface or mapping bridge that the runtime can drive, and whether it can be extended from the OS-level sidecar rather than only from a VIP host plugin.
-- Nektar Panorama: research Panorama's integration API and whether its custom host templates or MIDI/DAW mappings can be generated or driven from the sidecar runtime while preserving its proprietary layout semantics.
-- Komplete Kontrol: determine how Komplete Kontrol exposes DAW/host integration (e.g. via NKS, DAW templates, or host scripts) and what runtime-level hooks are needed to synchronize Komplete Kontrol's own browser/transport/mapping state with our controller runtime.
+## Research tasks
+The following research topics were moved to `PLAN.md` as actionable research tasks (see `PLAN.md` > "Research tasks").
 
-### Runtime communication model
-The runtime should be able to communicate with each integration path through explicit channels and fallbacks:
-- Plugin SDK channel: used when a plugin is present and can provide mapping markup, rich semantics, and custom actions. This channel should support describe/subscribe/begin/adjust/set/invoke/end and should expose enough metadata for the runtime to merge plugin-driven mappings with host state.
-- Host integration channel: used when the DAW provides a native controller integration API or when a host add-on is available. This channel should expose canonical parameter writes, transport/navigation, mixer and track state, action invocation, and host-aware notifications. Host add-ons may share this channel but only implement a subset of host capabilities due to DAW-specific constraints.
+*Vendor-specific runtime accommodation*
+- AKAI VIP: can VIP expose an external control interface or mapping bridge the runtime can drive; can it be extended from the OS-level sidecar vs only from a VIP host plugin?
+- Nektar Panorama: what does Panorama's integration API expose and can custom host templates or MIDI mappings be generated/driven from the sidecar runtime?
+- Komplete Kontrol: how does Komplete Kontrol integrate with DAWs (NKS, templates, host scripts) and what hooks are required to synchronize its browser/transport/mapping state with our runtime?
 
-The runtime-to-hardware bridge should also expose open-ended primitives, letting host/plugin-originated intent pass through the runtime to hardware and back again. This means the bridge and the runtime should support:
-- generic primitive commands such as `control`, `query`, `subscribe`, `announce`, and `feedback`
-- extensible metadata so a bridge can declare support for a specific feature, capability, or high-rate path
-- transport-agnostic support, since the on-the-wire protocol may be USB, MIDI, or anything in between; the exact transport is up to each bridge implementation
-- a feature negotiation phase to let runtime, host/plugin, and bridge agree on supported primitives before active control begins
-- a fallback model when hardware bridges only support a reduced feature set or vendor-specific extensions
+*Runtime communication model*
+- Document expected channels (plugin SDK, host integration channel) and fallback behaviors; enumerate required control primitives and metadata for describe/subscribe/begin/adjust/set/invoke/end.
 
-### Communication constraints
-- Versioning and capability negotiation: every channel must advertise version and capability metadata so the runtime can choose the best authoritative source and fall back when a newer capability is absent.
-- Conflict resolution: the runtime must decide which provider owns each control target, especially when plugin and host both expose the same parameter or action.
-- Latency and rate: host SDK and plugin SDK communication should support both command and high-rate feedback paths, but the runtime must gracefully degrade on hosts that only offer lower-rate updates.
-- Process separation: the runtime is a separate OS-level process, so inter-process transport must be reliable, authenticated, and able to multiplex multiple DAW instances or host sessions.
-- Free-form host adapter support: host add-ons may expose only partial or custom semantics, so the runtime must allow free-form mappings and explicit vendor-specific extensions while preserving the portable mapping contract.
-- Bridge feature declaration: hardware bridges should be able to declare support for named features and capabilities so the runtime can route controls through supported primitives and avoid unsupported paths.
-- Consistency: out-of-box controller experience should remain consistent by preferring host SDK integration when available, with plugin mappings or host add-on adapters as fallback sources.
+*Bridge support research*
+- Define a feature declaration API for bridges (capability list vs versioned protocol vs extension system).
+- Enumerate open-ended primitives for bridges (raw control forwarding, query/subscribe, feedback channels, event announcements).
+- Specify a feature negotiation flow between runtime, host/plugin, and bridge.
 
-### Bridge support research
-- Research how runtime-to-hardware bridges can expose a feature declaration API and whether this should be a generic capability list, a versioned protocol, or a plugin/host-driven extension system.
-- Explore open-ended primitives for bridges, such as raw control forwarding, state query/subscribe, feedback channels, and event announcements, to support both standard and custom hardware workflows.
-- Investigate how feature negotiation can be made explicit so runtime, host/plugin, and hardware bridges can agree on supported semantics before control surfaces are instantiated.
-- Treat bridges as an extension point for community contributors and hardware vendors, allowing custom bridge implementations to be added without changing the core runtime.
+*Sidecar runtime research*
+- Evaluate trade-offs between standalone sidecar and embedding runtime inside host SDK/add-ons.
+- Use the feasibility checklist in `DESIGN.md` to evaluate targets and recommend a default architecture (standalone by default; embedded where safe).
 
-### Sidecar runtime research
-- Evaluate whether a separate OS-level sidecar runtime is strictly required, or if the runtime responsibilities can be embedded into host SDKs or host add-ons (spawned as a singleton by the DAW or plugin).
-- Investigate trade-offs:
-  - **Version skew risk**: multiple host-provided embedded runtime implementations may diverge, causing inconsistent behavior across DAWs and making feature rollout complex.
-  - **Process isolation benefits**: a standalone sidecar centralizes hardware driver ownership, firmware/transport handling, and can improve stability and privilege separation.
-  - **Multi-instance handling**: standalone runtimes can better multiplex multiple DAW instances and enforce global conflict resolution policies.
-  - **Latency and performance**: embedding duties in-process can reduce IPC overhead but may increase risk of host-induced stalls; measure real-world latency for control and feedback paths.
-  - **Deployment and UX**: embedding reduces install surface but complicates updates; standalone sidecars allow single-version updates and vendor-driven drivers.
-- Recommended research actions:
-  - Prototype an embedded runtime inside a host add-on and a standalone sidecar for comparison.
-  - Test in at least two DAWs with different integration models (e.g., Bitwig and Ableton Live) and with one hardware bridge implementation.
-  - Document findings and recommend a default architecture with clear migration and versioning strategies.
+*DAW-specific integration research*
+- FL Studio, Bitwig, Ableton Live, Reaper, and custom/web-based hosts: gather capability matrices for add-on APIs, persistent scripting hosts, hardware/USB access, IPC options, and update/version models.
 
-#### Feasibility checklist for embedding the runtime
-When researching whether embedding the runtime into a host SDK or add-on is viable under DAW constraints, verify the following per-target DAW:
-
-- Persistent process capability: can the DAW or add-on spawn or host a long-running singleton process or service, or are add-ons limited to short-lived callbacks?
-- IPC options: does the DAW provide reliable inter-process communication (sockets, shared memory, named pipes) usable by an embedded runtime or add-on?
-- Plugin sandboxing and permissions: do plugin sandboxes prevent network/USB access or external process spawning that would block embedded bridge duties?
-- Hardware access: can an add-on or embedded component access local hardware or must communication go via the host MIDI/USB stack only?
-- Extension API completeness: does the DAW's SDK or scripting API expose the transport, mixer, track, and parameter events required for runtime semantics?
-- Versioning and update model: how are add-ons updated across DAW versions and can the embedded runtime be independently updated to avoid skew?
-- Multi-instance handling: can an embedded runtime detect and coordinate multiple DAW instances (same machine) to avoid controller conflicts?
-- Performance constraints: does embedding reduce latency sufficiently to justify losing process isolation, and are there risks of host stalls affecting runtime responsiveness?
-- Security and stability: would embedding increase crash/instability risks for the DAW or violate sandboxing/security policies of the host OS or DAW?
-
-Decision heuristics:
-- If several target DAWs lack persistent process support, reliable IPC, or hardware access for add-ons, a standalone sidecar is recommended.
-- If DAWs provide robust extension APIs, persistent scripting hosts, and safe ways to manage long-running adapters, embedding may be feasible and simpler for end users.
-- Prefer a hybrid model: support standalone sidecar as default, and allow embedded adapters where the DAW supports them safely. Always require explicit capability negotiation and version metadata.
-
-### DAW-specific integration research
-- FL Studio: investigate FL Studio's native controller scripting and MIDI remote support, and whether the sidecar can drive templates or mappings through wrapper scripts and shared state.
-- Bitwig: research Bitwig's controller API and JavaScript-based controller scripts, which may offer a strong host SDK path and a good model for sidecar integration via external scripts or adapters.
-- Ableton Live: determine how Live's Python MIDI Remote Scripts and Max for Live devices can be used as host add-ons or adapter layers to surface runtime mappings and transport/state events.
-- Reaper: assess Reaper's extensibility through ReaScript, JSFX, and extension APIs, which may allow a flexible host add-on approach or a lightweight bridge from the runtime to host state.
-- Custom/web-based hosts: consider browser-based DAW-style environments or web-hosted control panels, focusing on how the runtime can communicate with them through WebSockets, Web MIDI, browser extensions, or embedded JavaScript adapters.
+(Research tasks are now tracked in `PLAN.md` under the "Research tasks" section.)

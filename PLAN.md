@@ -23,6 +23,29 @@ Provide a small, extensible project that lets users map physical controls to plu
 - Define feature declaration and capability negotiation for bridge and provider support.
 - Define a conflict-resolution and multi-DAW instance strategy for the runtime.
 
+## Research tasks
+The detailed research topics from `DESIGN.md` have been moved here as actionable tasks.
+
+- Vendor-specific runtime accommodation
+	- AKAI VIP: investigate external control interfaces, VIP-host plugin vs sidecar options.
+	- Nektar Panorama: investigate integration API and template/mapping generation options.
+	- Komplete Kontrol: evaluate NKS/templates/host script hooks needed for synchronization.
+
+- Runtime communication model
+	- Document channels (plugin SDK, host integration channel) and required primitives.
+
+- Bridge support research
+	- Define a bridge feature-declaration API and protocol model.
+	- Enumerate bridge primitives and negotiation flow.
+	- Treat bridges as community/vendor extension points.
+
+- Sidecar runtime research
+	- Run feasibility checklist per DAW and recommend default (standalone vs embedded).
+	- Test embedding feasibility where DAW supports persistent adapters.
+
+- DAW-specific integration research
+	- Collect capability matrices for FL Studio, Bitwig, Ableton Live, Reaper, and custom/web hosts.
+
 ## Hardware Abstraction Layer (HAL)
 - Create a HAL that decouples physical controllers from plugin/DAW actions.
 - Define a stable interface for input devices, mappings, and output adapters.
