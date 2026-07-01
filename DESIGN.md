@@ -17,7 +17,7 @@ Our design goal is also to ensure the out-of-box experience with our provided DA
 
 Supporting roles:
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
-- **Semantic provider**: a portable contract that describes plugin control surfaces, actions, gestures, and rich feedback.
+- **Semantic provider**: a two-tiered contract for parameter-level mappings plus deeper plugin state semantics.
 - **Controller runtime**: the separate OS-level sidecar process that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
 Core software components:
@@ -34,8 +34,18 @@ For DAW-level integration, the host must provide either a host SDK or host add-o
 The host and semantic providers are both capability providers. The controller runtime is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
 
 ## Semantic mapping layer
-The semantic provider is the portable contract. A host without a native plugin SDK can consume the same semantics through mapping files, sidecar metadata, or an adapter layer.
-The mapping markup is the core contract, and it can be sourced from the plugin, from external sidecars, or from the host.
+The semantic provider is a two-tier contract:
+
+1. **Scalar parameter mappings and presentation rules**
+   - This tier is host- and plugin-capable because it relies on observable parameter state.
+   - It includes parameter mappings, read-only or read-write parameter exposure, display labels, conditional slot selection, enum value labels, and visibility rules.
+   - Hosts and plugins can provide this tier through mappings, sidecar metadata, or adapter layers.
+   - It is the portable foundation for controller surfaces and can work without deep plugin integration.
+
+2. **Deep plugin-state semantics**
+   - This tier is plugin-only and requires a plugin SDK extension.
+   - It exposes richer state, custom actions, semantic gestures, browser state, non-parameter UI state, and plugin-specific navigation semantics.
+   - Only the plugin can supply this level of contract because it can observe internal plugin state and semantics that the host cannot reliably infer.
 
 A DAW mapping layer may expose a standardized vocabulary for common semantics, but it should still allow the host to provide free-form, host-specific extensions when needed.
 
