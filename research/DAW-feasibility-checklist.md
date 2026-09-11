@@ -4,23 +4,23 @@ Purpose: enumerate the actual add-on mechanism(s) per DAW — some DAWs have mor
 
 ✓ yes · ✗ no · ⚠ partial/complicated (see parenthetical)
 
-| Add-on type | Long-running | Host control (transport/mixer/track) | Raw USB/HID | OSC/socket | Deep plugin state (tier 2) | Multi-instance |
+| Add-on type | Long-running | Host control (transport/mixer/track) | Raw USB/HID | Reaches hacpad service | Deep plugin state (tier 2) | Instance identity in messages |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Bitwig — Controller Script (JS)** | ✓ | ✓ | ✗ | ⚠ (host-dependent, unverified) | ⚠ (only if plugin exposes it) | ✗ |
-| **Ableton — Remote Script (Python)** | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Ableton — M4L (Max for Live)** | ✓ | ✓ | ⚠ (via native Max externals) | ✓ | ✗ | ✗ |
-| **FL Studio — Python controller script** | ✓ | ✓ (smaller surface) | ✗ | ⚠ (uncommon, verify per version) | ✗ | ✗ |
-| **Reaper — ReaScript (Lua/Python/EEL)** | ✓ | ✓ | ✗ | ✓ | ⚠ (only if plugin exposes it) | ✓ |
-| **Reaper — native extension (C/C++ SDK)** | ✓ | ✓ | ✓ | ✓ | ⚠ (only if plugin exposes it) | ✓ |
-| **Reaper — built-in OSC (control surface)** | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ |
-| **Web/Browser — WebMIDI / WebUSB / WebHID** | ✗ (transient pages) | ✗ (not a DAW — device access only) | ✓ | ✗ | ✗ | ✗ |
-| **Logic Pro — Control Surface SDK** *(deprioritized, unverified)* | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Cubase/Nuendo — Generic Remote / controller API** *(deprioritized, unverified)* | ⚠ (moderate) | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Pro Tools — EUCON/HUI** *(deprioritized, unverified)* | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ |
-| **Studio One — remote control API** *(deprioritized, unverified)* | ⚠ (moderate) | ✓ | ✗ | ⚠ (where available) | ✗ | ✗ |
-| **Host SDK** *(aux, aspirational — doesn't exist for any DAW in scope)* | ✓ | ✓ | ✗ | ⚠ (vendor-dependent) | ✗ | ⚠ (vendor-dependent) |
-| **Plugin wrapper** *(aux, DAW-agnostic)* | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ |
-| **Plugin SDK** *(aux, DAW-agnostic)* | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ |
+| **Bitwig — Controller Script (JS)** | ✓ | ✓ | ✗ | ✓ via OS MIDI ports (OSC/TCP possible too, host-dependent, unverified) | ⚠ (only if plugin exposes it) | ✓ (script can tag messages with project/session identity) |
+| **Ableton — Remote Script (Python)** | ✓ | ✓ | ✗ | ✓ via OS MIDI ports (no direct socket access) | ✗ | ✓ (same — script-generated identity) |
+| **Ableton — M4L (Max for Live)** | ✓ | ✓ | ⚠ (via native Max externals) | ✓ via OSC/UDP/TCP (Max externals) or OS MIDI ports | ✗ | ✓ |
+| **FL Studio — Python controller script** | ✓ | ✓ (smaller surface) | ✗ | ✓ via virtual MIDI ports (direct sockets uncommon, verify per version) | ✗ | ✓ |
+| **Reaper — ReaScript (Lua/Python/EEL)** | ✓ | ✓ | ✗ | ✓ via OSC/TCP/UDP directly, or virtual MIDI | ⚠ (only if plugin exposes it) | ✓ |
+| **Reaper — native extension (C/C++ SDK)** | ✓ | ✓ | ✓ | ✓ via OSC/TCP/UDP, virtual MIDI, or any native IPC | ⚠ (only if plugin exposes it) | ✓ |
+| **Reaper — built-in OSC (control surface)** | ✓ | ✓ | ✗ | ✓ via OSC directly, no script needed | ✗ | ⚠ (needs a distinct port/prefix configured per instance, not automatic) |
+| **Web/Browser — WebMIDI / WebUSB / WebHID** | ✗ (transient pages) | ✗ (not a DAW — device access only) | ✓ | ✓ via WebSocket to a native companion sidecar, or WebMIDI virtual ports | ✗ | ✓ (page generates its own session/tab identity) |
+| **Logic Pro — Control Surface SDK** *(deprioritized, unverified)* | ✗ | ✓ | ✗ | ✓ via CoreMIDI virtual ports (no direct socket access) | ✗ | ⚠ (plausible, unverified) |
+| **Cubase/Nuendo — Generic Remote / controller API** *(deprioritized, unverified)* | ⚠ (moderate) | ✓ | ✗ | ✓ via MIDI (Generic Remote); deeper IPC needs Steinberg SDK access | ✗ | ⚠ (plausible, unverified) |
+| **Pro Tools — EUCON/HUI** *(deprioritized, unverified)* | ✗ | ✓ | ✗ | ⚠ via HUI (MIDI-based); EUCON itself is Ethernet-based but partner-gated | ✗ | ⚠ (EUCON has workstation identity; HUI less clear — unverified) |
+| **Studio One — remote control API** *(deprioritized, unverified)* | ⚠ (moderate) | ✓ | ✗ | ✓ via MIDI; OSC/vendor SDK where available | ✗ | ⚠ (plausible, unverified) |
+| **Host SDK** *(aux, aspirational — doesn't exist for any DAW in scope)* | ✓ | ✓ | ⚠ (native; vendor-dependent whether exposed) | ⚠ via whatever protocol the vendor's SDK chooses to expose | ✗ | ⚠ (vendor-dependent, but any real host SDK exposes project/track identity) |
+| **Plugin wrapper** *(aux, DAW-agnostic)* | ✓ | ✗ | ✓ | ✓ via OSC/socket/WebSocket — native code, any protocol we choose | ✗ | ✓ (host already addresses each plugin instance separately) |
+| **Plugin SDK** *(aux, DAW-agnostic)* | ✓ | ✗ | ✓ | ✓ via OSC/socket/WebSocket — native code, any protocol we choose | ✓ | ✓ (same — one instance per loaded plugin) |
 
 ---
 
