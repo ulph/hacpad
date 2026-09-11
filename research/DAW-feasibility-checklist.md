@@ -92,6 +92,8 @@ These exercise the actual **USB device bridges** node (see `DESIGN.md`'s archite
   2. Implement a minimal `hacpad USB Bridge` (e.g. via `node-hid`/`hidapi`) that claims the device and round-trips one simple case (read one control, write one LED/display update).
   3. Confirm it coexists with — or deliberately takes over from — any class-compliant MIDI interface the same device also exposes.
 
+**TODO**: build a matrix for devices (Nektar Panorama, AKAI Advance, and others as they come up), same spirit as the DAW integration matrix above — but more open-ended. Nothing here is a documented API like a DAW's controller script surface; it's all reverse-engineering against unknowns, so the matrix needs a real "unverified/unknown" state per cell rather than forcing a ✓/✗/⚠ call before any capture work has happened. Candidate columns: what's confirmed reverse-engineered so far, what's suspected but unconfirmed, what's known to be locked down (e.g. firmware signing) — likely to change shape once we actually start capturing traffic, not something to lock in ahead of that.
+
 ## Next actions
 - Verify uncertain items by consulting the latest DAW developer docs and community examples (links and verification steps per-DAW).
 - For high-potential DAW targets (Reaper, Bitwig, Ableton Live, FL Studio, and web hosts — highest ROI), prototype small adapters (ReaScript, Bitwig controller script, Ableton Remote Script / M4L wrapper, FL's Python controller script + sidecar, or a WebMIDI client + sidecar) that communicate with a local sidecar via OSC/TCP; for each, fetch and cite the official developer docs and 2-3 community examples that demonstrate practical adapter patterns.
