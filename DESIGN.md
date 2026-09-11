@@ -18,12 +18,12 @@ Our design goal is also to ensure the out-of-box experience with our provided DA
 Supporting roles:
 - **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
 - **Semantic provider**: a two-tiered contract for parameter-level mappings plus deeper plugin state semantics.
-- **Controller runtime**: the separate OS-level sidecar process that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
+- **hacpad service**: the separate OS-level sidecar process that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
 
 Core software components:
 1. **Plugin SDK**: enriches plugin-host communication with semantic descriptions and custom mappings.
 2. **Host SDK**: provides the native DAW integration path for hardware-aware controller support.
-3. **Host add-ons**: host-specific extension modules or add-ons that expose integration paths for external parties. They may share the same runtime integration channel as a host SDK but are often limited to a subset of host capabilities due to DAW-specific constraints.
+3. **Host add-ons**: host-specific extension modules or add-ons that expose integration paths for external parties. They may share the same runtime integration channel as a host SDK but are often limited to a subset of host capabilities due to DAW-specific constraints. "Add-on" means whatever the DAW actually offers — a native SDK-like scripting API, an installable extension, or even just an existing OSC command surface (e.g. Reaper's built-in OSC, or AbletonOSC for Live) — not one specific mechanism.
 4. **Sidecar runtime app**: the OS-level process that owns mapping evaluation, routing, and the runtime state.
 5. **Runtime-to-hardware bridge**: the transport layer that connects the sidecar to actual controller hardware.
 6. **Mapping markup format**: the portable schema that describes the controller surface and semantics.
@@ -31,7 +31,34 @@ Core software components:
 For a plugin to work, the minimum required component is the mapping markup format.
 For DAW-level integration, the host must provide either a host SDK or host add-ons (component 2 or 3).
 
-The host and semantic providers are both capability providers. The controller runtime is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
+The host and semantic providers are both capability providers. The hacpad service is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
+
+## Architecture diagram
+
+```mermaid
+flowchart TB
+    USB["USB device bridges"] <--> Runtime
+    MIDI["MIDI Bridge"] <--> Runtime
+    OSC["OSC Bridge"] <--> Runtime
+
+    subgraph Core[" "]
+        direction LR
+        Mapping[("Mapping markup")] <-.-> Runtime["hacpad service"] <--> UI["hacpad Config UI"]
+    end
+
+    Runtime <--> HostSDK["hacpad Host SDK"]
+    Runtime <--> HostAddon["hacpad Host add-on"]
+    Runtime <--> PluginSDK["hacpad Plugin SDK"]
+    Runtime <-.-> Wrapper["hacpad plugin wrapper"]
+
+    classDef fallback stroke-dasharray: 4 3;
+    class Wrapper fallback;
+    style Core fill:none,stroke:none
+```
+
+Reading the diagram: each transport (USB, MIDI, OSC) reaches the **hacpad service** inside the sidecar process through its own transport-specific bridge — there is no single shared bridge component, just one per transport (and USB itself is really device-specific: a distinct bridge per controller, not one generic USB bridge). The service talks directly to whichever **clients** are present — Host SDK, Host add-on, hacpad Plugin SDK, or the hacpad plugin wrapper (tier-1 scalar params only, no deep plugin state) — over the same control contract: `describe / subscribe / beginGesture / adjust / set / invoke / endGesture`.
+
+There is no fixed "host endpoint vs. semantic provider" role split up front. Each client declares its own capabilities, at the **host level** (automation, transport, mixer, track/session state) and/or the **plugin level** (deep gestures, non-parameter UI state, custom actions) — and that capability set is specific to the client type *and* the DAW it's running in. The actual capability matrix (client × DAW × host-level/plugin-level) is future work, not started.
 
 ## Semantic mapping layer
 The semantic provider is a two-tier contract:
@@ -92,39 +119,6 @@ Allows:
   - `modeChanged(id)`
   - `mappingChanged()`
 
-## Ownership rules
-The ownership split is critical:
-
-- **Host/DAW owns**:
-  - automation
-  - project persistence
-  - undo if supported by host
-  - canonical parameter values
-  - offline render correctness
-
-- **Plugin semantics layer owns**:
-  - rich gestures
-  - semantic actions
-  - high-rate feedback when available
-  - non-parameter UI state
-  - contextual mappings
-  - custom browser/actions
-
-- **Controller runtime owns**:
-  - merging provider data
-  - routing control events
-  - layout and display evaluation
-  - fallback behavior when providers do not cover a target
-
-Direct plugin control must not secretly bypass the host for automatable parameter state.
-
-For automatable parameters, the direct endpoint must either:
-- call back into host parameter writes when available,
-- mirror the same gesture/value protocol the host sees, or
-- mark the action as non-automatable/plugin-private.
-
-Otherwise automation, undo, recall, and host UI sync break.
-
 ## Host endpoint component
 The host/DAW component is a first-class provider, and its role is broader than just plugin parameter ownership.
 It also owns DAW-level control surfaces, transport, mixer state, track/device selection, and project context.
@@ -147,11 +141,11 @@ The host endpoint and semantic provider are complementary:
 The runtime should not treat the semantic provider as special. Both provider types can offer describe/subscribe/begin/adjust/set/invoke/end capabilities.
 
 ## Provider model
-The runtime should treat DAW/host and semantic providers as capability providers.
+The hacpad service should treat DAW/host and semantic providers as capability providers.
 Hosts without a native plugin SDK can still participate by offering the same semantics through mappings, sidecar files, or an adapter layer.
 
 ```
-Controller runtime
+hacpad service
 ├─ DAW endpoint
 │  ├─ write parameter
 │  ├─ observe selected track/device
@@ -182,7 +176,7 @@ A dedicated **sidecar process** is required to make this architecture make sense
 
 The runtime protocol should also handle multiple DAW instances and any associated conflict resolution, even if that usage is rare.
 
-Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or controller runtime choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
+Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or hacpad service choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
 
 Both endpoints can implement the same control contract:
 
@@ -292,7 +286,7 @@ Suggested route preferences:
 - Mapping schema = universal integration language.
 - DAW adapter = executes mappings using host-visible state.
 - Plugin SDK = supplies mappings and optionally exposes extra state/actions.
-- Controller runtime = merges, evaluates, lays out, renders.
+- hacpad service = merges, evaluates, lays out, renders.
 
 Do not encode plugin intelligence only in DAW scripts.
 Do not encode controller intelligence only in plugin SDKs.

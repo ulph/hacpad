@@ -86,53 +86,11 @@ Template (answer each item per-DAW):
 - Security/stability concerns: Native code can crash host — isolate risky operations; prefer a sidecar for hardware drivers or heavy IO.
 - Notes / next verification steps: Prioritize Reaper for an embedded-adapter prototype (ReaScript) communicating to a sidecar via OSC/TCP.
 
-## Logic Pro (macOS)
-- Persistent process capability: Limited — Logic exposes Control Surface integrations, but lacks a general persistent scripting host for third parties comparable to Reaper.
-- IPC options: External helpers can use CoreMIDI, CoreAudio, sockets or XPC; embedding functionality inside Logic is constrained by Apple's ecosystem and Logic's plugin model.
-- Plugin sandboxing and permissions: AU and third-party plugins run under Apple's plugin policies and sandboxing; direct hardware access from plugins is limited.
-- Hardware access: CoreMIDI/CoreAudio are the supported paths; raw USB/HID access usually must be performed by an external helper process.
-- Extension API completeness: Control Surface SDK provides targeted control-surface hooks but is narrower than Reaper/Bitwig/Ableton scripting.
-- Versioning and update model: Drivers and plugins updated via installers; control-surface scripts are delivered by vendors and may require signing on macOS.
-- Multi-instance handling: Rarely needed; external sidecar is the practical approach for multiplexing.
-- Performance/latency constraints: Embedding risks host stability; prefer sidecar for high-rate tasks.
-- Security/stability concerns: Apple platform security and signing increase complexity for embedding; external signed helpers recommended.
-- Notes / next verification steps: Review Apple's Control Surface docs and CoreMIDI examples for building companion helpers.
-
-## Cubase / Nuendo
-- Persistent process capability: Moderate — Cubase provides controller APIs and Generic Remote mappings; deep embedded scripting is less common and often vendor-specific.
-- IPC options: Primarily MIDI/Generic Remote; some vendor SDKs enable richer IPC but typically require Steinberg SDK access.
-- Plugin sandboxing and permissions: Standard VST/AU restrictions apply; dedicated controller integrations are handled via the controller API.
-- Hardware access: Via OS MIDI drivers; raw USB access from inside the host is unlikely.
-- Extension API completeness: Varies by version; consult Steinberg developer docs for specific capabilities.
-- Versioning and update model: File-based templates or SDK installers; vendor partnerships may be required for advanced integrations.
-- Multi-instance handling: External sidecar recommended for coordination.
-- Performance/latency constraints: Controller templates suitable for control UI; high-rate paths are better handled by an external sidecar.
-- Security/stability concerns: May require SDK licensing for deep integration.
-- Notes / next verification steps: Obtain Steinberg developer docs and sample controller integrations.
-
-## Pro Tools
-- Persistent process capability: Limited — deep third-party extension points are constrained; control-surface integrations are typically via established protocols (EUCON, HUI) or vendor partnerships.
-- IPC options: EuCon or HUI for control surfaces; proprietary vendor SDKs for advanced integrations.
-- Plugin sandboxing and permissions: AAX plugin model and Avid's policies restrict arbitrary embedding; partner programs often required for deep integration.
-- Hardware access: Control surfaces supported via approved protocols; raw hardware access inside Pro Tools is uncommon.
-- Extension API completeness: Not as open as other DAWs; expect to rely on vendor protocols or partnership SDKs.
-- Versioning and update model: Strict compatibility and installer-based updates; coordinate closely with Avid practices.
-- Multi-instance handling: External sidecar recommended.
-- Performance/latency constraints: Real-time and compatibility constraints are strict.
-- Security/stability concerns: High; avoid embedding untrusted native code inside the host.
-- Notes / next verification steps: Investigate EUCON partner program and vendor SDK availability if Pro Tools integration is required.
-
-## Studio One
-- Persistent process capability: Moderate — Studio One provides remote control APIs and some extension points, but not as open as Reaper.
-- IPC options: MIDI, OSC, and vendor SDKs where available; verify current PreSonus developer offerings.
-- Plugin sandboxing and permissions: Standard VST/AU behaviour applies.
-- Hardware access: Via OS MIDI; raw USB/HID access requires a companion helper.
-- Extension API completeness: Moderate — sufficient for many control-surface mappings but limited for deep embedding.
-- Versioning and update model: Vendor-managed installers and updates; use vendor tools for distribution.
-- Multi-instance handling: Use external sidecar for coordination.
-- Performance/latency constraints: Control-rate operations supported; low-latency native paths require sidecar or native modules.
-- Security/stability concerns: Prefer vendor SDKs for deep work.
-- Notes / next verification steps: Fetch PreSonus SDK/docs and sample remote integrations.
+## Deprioritized DAWs (not yet verified, not near-term targets)
+- **Logic Pro (macOS)**: no general persistent scripting host for third parties; Control Surface SDK + CoreMIDI/CoreAudio only. Apple signing/sandboxing raises the bar for embedding.
+- **Cubase / Nuendo**: controller API + Generic Remote mappings; deeper IPC needs Steinberg SDK access.
+- **Pro Tools**: constrained third-party extension points; control-surface integration goes through EUCON/HUI or a partner program.
+- **Studio One**: remote control APIs exist but are less open than Reaper's; verify current PreSonus SDK offerings if this becomes a target.
 
 ## Web / Browser-based hosts
 - Persistent process capability: Limited — browser pages are transient; persistence requires either a service worker (limited) or an external native companion / server.
@@ -178,27 +136,21 @@ When we control the client source, the web-hosted DAW case becomes flexible: pre
 
 ---
 
-## Next verification actions (FL + Web)
-- FL Studio: implement the prototype steps above (FL controller script + sidecar) and record latency, reliability, and any script API limitations.
-- Web: implement a minimal WebMIDI client and a sidecar WebSocket bridge; validate capability negotiation and fallback logic across browsers.
-
-
----
-
-## Vendor / Host Add-on Notes (examples)
 ## Vendor / Host Add-on Notes (examples)
 - Komplete Kontrol / Native Instruments: integration primarily via NKS, host templates, and plugin/host bridges. Deep sync may require vendor cooperation or template generation.
 - AKAI VIP, Nektar Panorama: vendor-specific integrations often expose custom templates/mappings and proprietary protocols; treat them as target adapters and approach via vendor SDKs or template generation.
 
----
+## USB device bridge prototype targets
+These exercise the actual **USB device bridges** node (see `DESIGN.md`'s architecture diagram) — bespoke, non-class-compliant hardware, as opposed to anything that already shows up as a standard OS MIDI port (that's the MIDI Bridge's job, not this one). This is where real reverse-engineering work is required, and is the differentiating part of the project — not incidental to it. Ties to `PLAN.md`'s "Vendor-specific hardware bridge accommodation" research tasks.
 
-## Verification plan and sources to fetch
-- For each DAW above, fetch and cite the official developer docs (controller API, scripting guides, SDK pages) and 2-3 community examples or forum posts that demonstrate practical adapter patterns.
-- Prioritize verification for: Reaper, Bitwig, Ableton Live, and web hosts (highest ROI for prototypes).
-
-
----
+- **Nektar Panorama**: proprietary control protocol layered over its USB-MIDI interface; the interesting part (LCD text, motorized faders, mode state) lives outside standard MIDI messages. Needs USB traffic capture (Wireshark + USBPcap, or a HID/USB sniffer) against the vendor's own software to reverse the extra protocol.
+- **AKAI Advance / APC (VIP-integrated devices)**: similar story — VIP-mode features (display feedback, per-plugin templates) go over a vendor-specific channel, not just class-compliant MIDI. Needs the same capture-and-reverse approach; AKAI VIP's own host software is the reference implementation to observe.
+- Prototype steps (either device):
+  1. Capture raw USB traffic between the vendor's own software and the device to characterize the non-MIDI protocol.
+  2. Implement a minimal `hacpad USB Bridge` (e.g. via `node-hid`/`hidapi`) that claims the device and round-trips one simple case (read one control, write one LED/display update).
+  3. Confirm it coexists with — or deliberately takes over from — any class-compliant MIDI interface the same device also exposes.
 
 ## Next actions
 - Verify uncertain items by consulting the latest DAW developer docs and community examples (links and verification steps per-DAW).
-- For high-potential targets (Reaper, Bitwig, Ableton Live), prototype small adapters (ReaScript, Bitwig controller script, Ableton Remote Script / M4L wrapper) that communicate with a local sidecar via OSC/TCP.
+- For high-potential DAW targets (Reaper, Bitwig, Ableton Live, FL Studio, and web hosts — highest ROI), prototype small adapters (ReaScript, Bitwig controller script, Ableton Remote Script / M4L wrapper, FL's Python controller script + sidecar, or a WebMIDI client + sidecar) that communicate with a local sidecar via OSC/TCP; for each, fetch and cite the official developer docs and 2-3 community examples that demonstrate practical adapter patterns.
+- For USB device bridges, start with the Nektar Panorama or AKAI Advance capture-and-reverse steps above.
