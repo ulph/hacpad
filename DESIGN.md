@@ -1,223 +1,112 @@
 # hacpad Design: Host-Agnostic Semantic Control
 
-This design centers on two core pieces:
+## Priority
+The star of the show is getting bespoke, reverse-engineered vendor hardware (Nektar Panorama, AKAI Advance, etc. — see `research/DAW-feasibility-checklist.md`) talking directly to whatever plugin is loaded, including drawing to the hardware's own screen/LEDs.
 
-- **Mapping markup**: the portable description of how DAW/plugin parameters, actions, gestures, and feedback map to actual controller hardware. This is the semantic contract that is shared across hosts, plugins, and external maps.
-- **Hardware communication**: the transport path between software and controller hardware, which can be delivered through a host-specific add-on, a host-level SDK, or through a plugin-layer SDK.
+Two separate axes matter for everything else, and they're inverted from each other:
 
-A research task is needed to determine which DAWs expose integration paths that allow external parties to build host-specific add-ons.
+1. **What we can actually build, near-term.** hacpad Host add-on and the hacpad plugin wrapper are both things *we* build ourselves — the add-on using whatever scripting/extension/OSC surface a DAW already exposes (no DAW vendor cooperation needed beyond what's already public), the wrapper by hosting the target plugin ourselves. Both are reachable now. hacpad Host SDK depends on a DAW vendor building and exposing a native SDK to us — possible, but not likely to be picked up. hacpad Plugin SDK depends on plugin vendors adopting it directly — very unlikely to ever reach critical mass.
+2. **What wins at runtime if several happen to be available for the same DAW/plugin.** There, Host SDK is preferred first when present, since it's the most authoritative and complete — see [Runtime priority](#runtime-priority) below. It's the least likely to exist, but the best option if it does.
 
-These are the two main axes: what the controller should do, and how the controller is actually driven.
+This shapes the whole design: the near-term core loop below needs no plugin-vendor cooperation and no DAW-vendor cooperation beyond a DAW's already-public extension surface.
 
-When both host-level and plugin-layer communication are available, host-level SDK integration takes precedence. The plugin layer can still declare custom mappings, but those mappings are always expressed as markup and can be sourced externally to the plugin.
+## Core loop (v1)
+```
+hacpad USB Bridge (reverse-engineered device driver)
+        ↕
+   hacpad service (thin routing)
+        ↕
+   hacpad plugin wrapper                 hacpad Host add-on
+   (hosts the target plugin;             (built against whatever the DAW
+   reads its own parameter list           already exposes — a scripting
+   via VST3/CLAP introspection)           API, extension, or OSC surface)
+```
 
-Host vs plugin capability resolution should be negotiated via versioning and capability metadata, so the runtime can choose the most authoritative source and fall back cleanly.
+- Both paths are things **we** build — no plugin-vendor or DAW-vendor cooperation required beyond what's already publicly exposed.
+- The wrapper needs zero cooperation from the plugin author — it hosts the target plugin and reads its already-standard parameter metadata (name, range, current value), the same way any VST3/CLAP host can.
+- A working default needs **no authored mapping markup at all**: e.g. "encoder 1–8 → the plugin's first 8 automatable parameters" is a reasonable zero-config default. Mapping markup (below) is the enhancement layer on top — relabeling, enums, conditional slots — not a prerequisite for a first working demo.
+- Screen/LED drawing is a first-class capability of the USB Bridge, not an afterthought — it's specifically why reverse-engineering the bespoke protocol matters, since generic MIDI feedback can't drive arbitrary LCD/OLED graphics.
+- Host SDK and Plugin SDK (below) are later enhancements — not required for the core loop, and not something we control the timeline of.
 
-Our design goal is also to ensure the out-of-box experience with our provided DAW add-ons is as consistent as possible.
+## Architecture diagram
 
-Supporting roles:
-- **Host endpoint**: the DAW/host provider that owns canonical parameter state, automation, persistence, and undo.
-- **Semantic provider**: a two-tiered contract for parameter-level mappings plus deeper plugin state semantics.
-- **Controller runtime**: the separate OS-level sidecar process that merges provider descriptions, routes control events, evaluates mappings, and renders the controller surface.
+```mermaid
+flowchart TB
+    USB["USB device bridges"] <--> Runtime
+    MIDI["MIDI Bridge"] <--> Runtime
+    OSC["OSC Bridge"] <--> Runtime
 
-Core software components:
-1. **Plugin SDK**: enriches plugin-host communication with semantic descriptions and custom mappings.
-2. **Host SDK**: provides the native DAW integration path for hardware-aware controller support.
-3. **Host add-ons**: host-specific extension modules or add-ons that expose integration paths for external parties. They may share the same runtime integration channel as a host SDK but are often limited to a subset of host capabilities due to DAW-specific constraints.
-4. **Sidecar runtime app**: the OS-level process that owns mapping evaluation, routing, and the runtime state.
-5. **Runtime-to-hardware bridge**: the transport layer that connects the sidecar to actual controller hardware.
-6. **Mapping markup format**: the portable schema that describes the controller surface and semantics.
+    subgraph Core[" "]
+        direction LR
+        Mapping[("Mapping markup")] <-.-> Runtime["hacpad service"] <--> UI["hacpad Config UI"]
+    end
 
-For a plugin to work, the minimum required component is the mapping markup format.
-For DAW-level integration, the host must provide either a host SDK or host add-ons (component 2 or 3).
+    Runtime <--> HostSDK["hacpad Host SDK"]
+    Runtime <--> HostAddon["hacpad Host add-on"]
+    Runtime <--> PluginSDK["hacpad Plugin SDK"]
+    Runtime <-.-> Wrapper["hacpad plugin wrapper"]
 
-The host and semantic providers are both capability providers. The controller runtime is intentionally a separate OS-level process, enabling a true sidecar architecture that isolates hardware communication and mapping evaluation from the host or plugin process.
+    classDef fallback stroke-dasharray: 4 3;
+    class Wrapper fallback;
+    style Core fill:none,stroke:none
+```
+
+Reading the diagram: each transport (USB, MIDI, OSC) reaches the **hacpad service** through its own transport-specific bridge — there is no single shared bridge component, just one per transport (and USB itself is really device-specific: a distinct bridge per controller, not one generic USB bridge). The service talks directly to whichever **client** is present — Host SDK, Host add-on, hacpad Plugin SDK, or the hacpad plugin wrapper — over the same control contract: `describe / subscribe / beginGesture / adjust / set / invoke / endGesture`.
+
+The wrapper is dashed because it's capability-limited (tier-1 scalar params only, no deep plugin state) — not because it's low-priority; per [Core loop](#core-loop-v1), it's one of the two things we actually build first. Host SDK and Plugin SDK are the ones outside our control — see [Priority](#priority).
+
+Each client declares its own capabilities, at the **host level** (automation, transport, mixer, track/session state) and/or the **plugin level** (deep gestures, non-parameter UI state, custom actions) — and that capability set is specific to the client type *and* the DAW it's running in. The actual capability matrix (client × DAW × host-level/plugin-level) is future work, not started.
+
+## Client model
+Ordered by what we actually control:
+
+- **hacpad service**: the OS-level sidecar process. Owns mapping evaluation, routing, and runtime state — it's the only thing that talks to more than one other component. A native Plugin SDK plugin, or a Host add-on in a permissive-enough DAW scripting environment (e.g. Reaper), *could* technically bypass it and talk straight to a USB bridge — but that gives up what the service exists for: exclusive-device arbitration across multiple simultaneous consumers, sandboxing compliance, crash isolation from a far-less-stable plugin/script process, and not re-deriving the reverse-engineered USB protocol per client instead of once.
+- **Transport bridges**: one per transport (USB, MIDI, OSC — see diagram), each owning the actual driver work for that transport. USB bridges are device-specific, not generic.
+  - **OSC specifically**: publish our own OSC address grammar (a documented namespace, e.g. `/hacpad/<target>/...`) instead of only reacting to whatever address scheme a given app happens to use. The `<target>` isn't a new vocabulary to invent — it's the same parameter/action naming mapping markup already uses (`filter.cutoff`, `browser.next_preset`, etc.), just exposed as OSC paths. Anyone targeting that grammar directly — a generic app (TouchOSC, Lemur, Open Stage Control) configured by hand, or a bespoke client — gets the zero-config default with no per-layout mapping translation needed. Same pattern Reaper's own OSC implementation already uses in practice (publish `.ReaperOSC`, let TouchOSC/Lemur users configure against it). Mapping markup still exists for customizing the binding, just isn't required for the default case.
+- **hacpad plugin wrapper**: hosts the target plugin and exposes its standard (VST3/CLAP-introspectable) parameters. We build it; no plugin-vendor cooperation needed. Core loop client — see [Core loop](#core-loop-v1).
+- **hacpad Host add-on**: built against whatever a DAW already exposes — a scripting API, an installable extension, or an existing OSC command surface (e.g. Reaper's built-in OSC, or AbletonOSC for Live). We build it; no DAW-vendor cooperation needed beyond what's already public. Core loop client, one per target DAW.
+- **hacpad Host SDK**: a native SDK a DAW vendor would need to build and expose to us. Preferred at runtime when present (see [Runtime priority](#runtime-priority)) — but not something we control the timeline of, and not likely to be picked up.
+- **hacpad Plugin SDK**: an SDK plugin authors adopt directly, for deeper (tier-2) state a wrapper can't reach. Requires plugin-vendor adoption directly — very unlikely to reach critical mass.
+- **hacpad Config UI**: hacpad supplies mapping markup by some means, but it has to be user-editable, not fixed — this is where. Beyond that:
+  - Each bridge contributes its own configuration surface here instead of the UI hardcoding one generic form (a USB bridge's device selection/calibration looks nothing like an OSC bridge's listen port/address prefix).
+  - Editing works at the plugin-instance level, not just per plugin type — two loaded instances of the same plugin can want different physical mappings.
+  - Separately, a bridge-instance-level tweak: the canonical mapping refers to controls abstractly (e.g. "bank A, knob 8") — binding that to the actual physical control on *this specific connected device* is its own layer, distinct from the plugin-instance mapping above.
+  - Open question, not resolved here: the precedence hierarchy across mapping sources (built-in, user edits, runtime-generated fallback, etc.) when more than one applies.
+  - Not every config surface lives here either: a bridge with its own screen (Nektar Panorama, AKAI Advance) can render its own config menu directly on the device, navigated by its own buttons, instead of or alongside the Config UI.
+- **Mapping markup**: the portable schema describing pages, slots, labels, conditions, gestures, and feedback. Optional for a working default (see Core loop); required for anything beyond the zero-config case.
 
 ## Semantic mapping layer
-The semantic provider is a two-tier contract:
+hacpad's mapping contract has two tiers:
 
 1. **Scalar parameter mappings and presentation rules**
-   - This tier is host- and plugin-capable because it relies on observable parameter state.
-   - It includes parameter mappings, read-only or read-write parameter exposure, display labels, conditional slot selection, enum value labels, and visibility rules.
-   - Hosts and plugins can provide this tier through mappings, sidecar metadata, or adapter layers.
-   - It is the portable foundation for controller surfaces and can work without deep plugin integration.
+   - Host- and plugin-capable, because it only needs observable parameter state.
+   - Covers parameter mappings, read-only/read-write exposure, display labels, conditional slot selection, enum labels, visibility rules.
+   - The portable foundation for controller surfaces; works without deep plugin integration — this is the tier the plugin wrapper reaches.
 
 2. **Deep plugin-state semantics**
-   - This tier is plugin-only and requires a plugin SDK extension.
-   - It exposes richer state, custom actions, semantic gestures, browser state, non-parameter UI state, and plugin-specific navigation semantics.
-   - Only the plugin can supply this level of contract because it can observe internal plugin state and semantics that the host cannot reliably infer.
+   - Plugin-only, requires the hacpad Plugin SDK.
+   - Exposes richer state, custom actions, semantic gestures, browser state, non-parameter UI state, plugin-specific navigation.
+   - Only the plugin can supply this because it alone observes its own internal state.
 
-A DAW mapping layer may expose a standardized vocabulary for common semantics, but it should still allow the host to provide free-form, host-specific extensions when needed.
+Integration can be implemented in any host-supported environment (JavaScript, Max for Live, or other host-specific extension systems). A host may also offer an optional native SDK for a deeper integration path — that's a separate host-author SDK, not required for the portable mapping contract.
 
-Integration can be implemented in any host-supported environment, such as JavaScript, Max for Live, or other host-specific extension systems. For DAW authors who want a deeper native integration path, an optional C++ SDK can be provided by the host, but that is a separate host-author SDK and not required for the portable mapping contract.
-
-1. **Declarative surface description**
-   - A `describeControllerSurface()` contract describes how a plugin or mapping wants to appear on controllers.
-   - It returns pages, slots, labels, conditions, enums, gestures, meters, preferred controls, and other metadata.
-
-### Declarative metadata example
+### Declarative surface description
+A `describeControllerSurface()` contract describes how a plugin or mapping wants to appear on controllers — pages, slots, labels, conditions, enums, gestures, meters, preferred controls, formatting hints, dynamic slot selection rules:
 ```text
 plugin.describeControllerSurface();
 ```
-Returns:
-- pages
-- slots
-- labels
-- conditions
-- enums
-- gestures
-- meters
-- preferred controls
-- formatting hints
-- dynamic slot selection rules
 
-### Live endpoint example
+### Live endpoint
 ```text
 plugin.controllerEndpoint();
 ```
-Allows:
-- controller -> plugin:
-  - `beginGesture(param)`
-  - `adjust(param, delta)`
-  - `setNormalized(param, value)`
-  - `invokeAction(action)`
-  - `selectMode(enumValue)`
-  - `browsePreset(delta)`
-  - `endGesture(param)`
-- plugin -> controller:
-  - `valueChanged(param)`
-  - `textChanged(param)`
-  - `pageInvalidated(page)`
-  - `meterChanged(id)`
-  - `modeChanged(id)`
-  - `mappingChanged()`
+- controller → plugin: `beginGesture(param)`, `adjust(param, delta)`, `set(param, value)`, `invoke(action)` (`selectMode`/`browsePreset` are just `invoke()` calls with a specific action name, not separate primitives), `endGesture(param)`
+- plugin → controller: `valueChanged(param)`, `textChanged(param)`, `pageInvalidated(page)`, `meterChanged(id)`, `modeChanged(id)`, `mappingChanged()`
 
-## Ownership rules
-The ownership split is critical:
+This is the contract on the service-to-client side. The same kind of question exists on the bridge-to-service side and isn't resolved: whether USB, MIDI, and OSC bridges each translate their raw input straight into service-internal calls, or whether they should all normalize into one shared internal message format first. That's an implementation-burden question, separate from mapping markup (which only fixes naming, not the wire format) — still open.
 
-- **Host/DAW owns**:
-  - automation
-  - project persistence
-  - undo if supported by host
-  - canonical parameter values
-  - offline render correctness
-
-- **Plugin semantics layer owns**:
-  - rich gestures
-  - semantic actions
-  - high-rate feedback when available
-  - non-parameter UI state
-  - contextual mappings
-  - custom browser/actions
-
-- **Controller runtime owns**:
-  - merging provider data
-  - routing control events
-  - layout and display evaluation
-  - fallback behavior when providers do not cover a target
-
-Direct plugin control must not secretly bypass the host for automatable parameter state.
-
-For automatable parameters, the direct endpoint must either:
-- call back into host parameter writes when available,
-- mirror the same gesture/value protocol the host sees, or
-- mark the action as non-automatable/plugin-private.
-
-Otherwise automation, undo, recall, and host UI sync break.
-
-## Host endpoint component
-The host/DAW component is a first-class provider, and its role is broader than just plugin parameter ownership.
-It also owns DAW-level control surfaces, transport, mixer state, track/device selection, and project context.
-
-The host endpoint should support:
-- canonical parameter writes and automation commits
-- host-level parameter control (track levels, send levels, mixer controls)
-- transport control and synchronization state
-- track/scene/bank navigation and selection
-- DAW action invocation (save, undo, track arming, etc.)
-- preset browsing if supported by the host
-- selected track/device observation
-- host-visible state notifications such as track/device/focus changes
-- reactive updates for parameter/automation state
-
-The host endpoint and semantic provider are complementary:
-- host endpoint = DAW/project-aware lane for canonical parameters, transport, mixer, and track-level control
-- semantic provider = host-agnostic lane for surface descriptions, actions, gestures, and rich feedback
-
-The runtime should not treat the semantic provider as special. Both provider types can offer describe/subscribe/begin/adjust/set/invoke/end capabilities.
-
-## Provider model
-The runtime should treat DAW/host and semantic providers as capability providers.
-Hosts without a native plugin SDK can still participate by offering the same semantics through mappings, sidecar files, or an adapter layer.
-
-```
-Controller runtime
-├─ DAW endpoint
-│  ├─ write parameter
-│  ├─ observe selected track/device
-│  ├─ write mixer/track/send controls
-│  ├─ control transport and session state
-│  ├─ invoke DAW actions
-│  ├─ browse presets if supported
-│  └─ receive reactive updates
-└─ Semantic provider
-   ├─ describe semantic pages
-   ├─ format values
-   ├─ invoke semantic actions
-   ├─ provide high-rate feedback when available
-   ├─ support mapping-only host integration
-   └─ receive reactive updates
-```
-
-## Hardware communication
-Hardware integration can come from either:
-- **Host-level SDK**: the preferred path when the DAW exposes controller hardware integration directly.
-- **Plugin-layer SDK**: an alternate path when the host does not provide hardware integration.
-
-The plugin-layer SDK may declare custom mappings, but those mappings are still markup and can be sourced externally.
-
-Hardware only needs one integration path: either the DAW host SDK or the plugin-layer SDK. In either case, the mapping markup is the shared contract that describes how the controller should behave.
-
-A dedicated **sidecar process** is required to make this architecture make sense. The sidecar should run as a separate OS-level process and perform the actual communication to/from hardware. It should own the implementation drivers that connect the sidecar runtime to the physical controller and relay host/plugin events to the hardware.
-
-The runtime protocol should also handle multiple DAW instances and any associated conflict resolution, even if that usage is rare.
-
-Host vs plugin authority should be resolved via explicit versioning and capability metadata, letting the sidecar or controller runtime choose the authoritative integration path and gracefully degrade when a newer host or plugin capability is absent.
-
-Both endpoints can implement the same control contract:
-
-- `describe()`
-- `subscribe()`
-- `beginGesture()`
-- `adjust()`
-- `set()`
-- `invoke()`
-- `endGesture()`
-
-The merge/router decides who handles each target.
-
-## Control semantics and routing
-Binding routes declare the control path:
-
-```yaml
-slots:
-  - parameter: filter.cutoff
-    route: host_parameter
-    direct_feedback: true
-  - action: browser.next_preset
-    route: plugin_endpoint
-  - action: mod.assign_source
-    route: plugin_endpoint
-    affects_project_state: true
-```
-
-## Plugin specific extensions
-Deeper plugin-only state semantics, that the plugin drives directly.
-
-## Mapping file as universal contract
-The mapping file is the portable semantic contract.
-DAW adapters and plugin endpoints should consume the same schema.
-The DAW layer may publish a standard vocabulary for common domain concepts, while still supporting free-form mappings and host-specific vocabularies.
+## Mapping markup
+The mapping file is the portable semantic contract; every client consumes the same schema. A DAW layer may publish a standard vocabulary for common concepts while still supporting free-form, host-specific extensions.
 
 Supported sources:
 - built into plugin
@@ -225,19 +114,24 @@ Supported sources:
 - DAW-provided map
 - community map
 - user map
-- runtime-generated fallback
+- runtime-generated fallback (includes the zero-config default described in [Core loop](#core-loop-v1))
 
-A mapping should cover:
-- pages
-- slots
-- conditions
-- labels/value formatters
-- enum-dependent remapping
-- gestures
-- actions
-- display hints
+A mapping covers: pages, slots, conditions, labels/value formatters, enum-dependent remapping, gestures, actions, display hints.
 
-## Example mapping fragment
+Binding routes declare the control path:
+```yaml
+slots:
+  - parameter: filter.cutoff
+    route: host      # via Host SDK/add-on
+    direct_feedback: true
+  - action: browser.next_preset
+    route: plugin    # via Plugin SDK or wrapper
+  - action: mod.assign_source
+    route: plugin
+    affects_project_state: true
+```
+
+Example mapping fragment:
 ```yaml
 plugin:
   match:
@@ -280,19 +174,25 @@ pages:
             label: FM Amt
 ```
 
-## Runtime priority rules
-Suggested route preferences:
-- Automatable parameter write: DAW endpoint preferred.
-- Plugin-private action: plugin endpoint preferred.
+## DAW-level integration
+The capability list below applies to whichever host-side client is actually present — Host add-on (core loop, built now) or Host SDK (later, if a DAW vendor ever provides one). It should support: canonical parameter writes and automation commits, host-level parameter control (track/send levels, mixer controls), transport control and sync state, track/scene/bank navigation, DAW action invocation (save, undo, arming), preset browsing if supported, selected track/device observation, and reactive updates for the above.
+
+Multi-DAW-instance conflict resolution, and host-vs-plugin authority resolved via versioning/capability metadata, are real concerns here too — but only once the core loop is working.
+
+## Runtime priority
+Half-baked, not settled — a first guess at route preferences when more than one client could handle the same target, not a decided protocol rule. This is about which one wins at runtime, not which one we build first (see [Priority](#priority)):
+- Automatable parameter write: Host SDK preferred over Host add-on, over plugin client.
+- Plugin-private action: plugin client (wrapper or Plugin SDK) preferred.
 - Page/label/value formatting: plugin or user map preferred.
-- Track/device/session navigation: DAW endpoint preferred.
+- Track/device/session navigation: Host SDK or Host add-on preferred, whichever is present.
 - Fallback: runtime generic mapping.
 
 ## Architecture summary
 - Mapping schema = universal integration language.
-- DAW adapter = executes mappings using host-visible state.
-- Plugin SDK = supplies mappings and optionally exposes extra state/actions.
-- Controller runtime = merges, evaluates, lays out, renders.
+- hacpad plugin wrapper + hacpad Host add-on = the core loop; both are ours to build, no external adoption required.
+- hacpad Host SDK = preferred at runtime if a DAW vendor ever exposes one; not ours to build.
+- hacpad Plugin SDK = later enhancement for plugin vendors who adopt it directly; unlikely to reach critical mass.
+- hacpad service = merges, evaluates, routes, renders.
 
 Do not encode plugin intelligence only in DAW scripts.
 Do not encode controller intelligence only in plugin SDKs.
