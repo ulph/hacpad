@@ -1625,6 +1625,25 @@ real hardware:
   connection-status indicator), just not on the button it was assumed to be near. The other 3 LEDs in
   that same strip have no known CC yet -- open follow-up.
 
+### Thirty-first finding: the pageTemplate=1 "message" write does NOT clear an already-open popup menu
+
+Cross-checked the service's exhaustive default-state write (applied at every startup) against the real
+screen via the webcam. Assumed output: a clean "hacpad" message-mode takeover, since `message` is sent
+last in `apply()`'s field order and message mode was believed to be a full-screen, exclusive rendering
+pathway. **Actual screen**: "hacpad" text was visible, but with the popup menu's highlighted-row bars
+(from the same default state's `menu_items`/`menu_highlight` demo content, sent earlier in the same
+`apply()` call) still overlaid on top of it -- a genuinely new interaction, not previously tested.
+
+The popup (displayId 8, hardcoded `page_template=0`) is confirmed (Twenty-seventh finding) to be
+dismissed only by a real switch to a *different, real* page_template via the normal compose path (e.g.
+a title-bar write on template 16) -- **not** by the literal `clearMenu()` bytes alone. This finding adds:
+it's **also not cleared by a subsequent `pageTemplate=1` message write** -- message mode coexists with an
+already-open popup instead of taking over the whole screen as assumed. Practical fix applied in
+`service.rs`: the default boot state no longer actually writes the popup fields to the real device (kept
+only in the shared/client-facing JSON as demo content to explicitly try), so the resting "hacpad" screen
+stays clean. Not yet isolated further (e.g. whether message mode ever clears the popup under any
+ordering) -- open follow-up if it matters later.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical

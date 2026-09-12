@@ -57,7 +57,7 @@ use panorama_bridge::*;
 
 const WS_PORT: u16 = 8091;
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Deserialize, Serialize, Default, Clone)]
 struct ScreenUpdate {
     #[serde(default)]
     layout: String,
@@ -279,7 +279,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     // comment: this is the shared, bidirectional source of truth, not a
     // client-side fallback baked into index.html.
     let initial = default_state();
-    if let Err(e) = device.apply(&initial) {
+
+    // Cross-checked against the real screen (webcam): applying `initial`
+    // verbatim -- including its popup-menu demo content (menu_items/
+    // menu_highlight) -- left the popup's highlighted-row bars visibly
+    // overlaid ON TOP of the "hacpad" message text, instead of a clean
+    // message-mode takeover. The popup (displayId 8, hardcoded
+    // page_template=0) is confirmed dismissed only by a genuine switch to a
+    // different real page_template ("Twenty-seventh finding"); the
+    // pageTemplate=1 message write is a separate pathway that evidently
+    // does NOT do that, so it doesn't clear a popup opened earlier in the
+    // same apply() sequence. Don't actually write the popup fields to the
+    // real device as part of the default boot state (avoids the visible
+    // conflict) -- but keep them in the shared/client-facing JSON below so
+    // the simulator still offers that demo content to explicitly try.
+    let mut initial_for_device = initial.clone();
+    initial_for_device.menu_items = Vec::new();
+    initial_for_device.menu_highlight = None;
+    if let Err(e) = device.apply(&initial_for_device) {
         eprintln!("warning: failed to apply default state to device: {e}");
     }
     let initial_map = match serde_json::to_value(&initial)? {
