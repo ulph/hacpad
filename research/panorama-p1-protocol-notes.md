@@ -1016,6 +1016,65 @@ button bypasses all of this and sends every field in one frame, for a well-defin
 (used to reset the device between tests above) or a manual resync if a client's diff bookkeeping and
 the device's real state have drifted apart.
 
+### Fifteenth finding: a full numeric sweep finds 4 new page_templates and a hard validity ceiling, plus 1 new displayId
+
+Prompted by "there are still unexplored templates and displayIds likely... by all, I mean more than the
+numbers found in Bitwig" — rather than only testing the ids named in the driver's source, swept the
+actual byte ranges directly against hardware.
+
+**`displayId` sweep** (template fixed at 16, one message per id, ids 0-32 plus edge bytes 40-255, all in
+one session): only **`displayId 3`** produced new visible content, beyond the already-confirmed
+0/1/2/4/6/7. It renders in the **top-right of the big-font row**, directly paired with `displayId 2`
+(which sits top-left of that same row) — i.e. `displayId 2` is the parameter *name* and `displayId 3`
+is the parameter *value*, a matched pair for the "currently touched" readout (`currentParameterInfo` /
+`currentParameterValue` in the driver's own naming). No other id in the swept range (5, 8, 9-32, or any
+edge byte up to 255) produced any new visible content anywhere on screen. (Two entries in this same
+sweep, `displayId 1` and `6`, unexpectedly showed no effect despite being independently confirmed
+reliable elsewhere this session — most likely an isolated dropped message at this sweep's 600ms
+cadence, not a real behavior change; not treated as a finding.)
+
+**`page_template` sweep** (`displayId` fixed at 1/title-bar, one message per template id, ids 6-15,
+23-32, and edge bytes up to 255): the first several new values worked and rendered genuinely distinct,
+previously unseen widgets — **6** (a list with one row highlighted/selected, small row-number labels on
+the left), **7** (four buttons labeled `S1`-`S4` plus a `B` indicator — plausibly a scene/clip-launch
+row), and **8/9** (a vertical list of up to 8 rows, each paired with a `Pre` label — plausibly a
+browser/preset list; 8 and 9 rendered indistinguishably in every test, not yet conclusively split
+apart). Every value from **10 through 255** tried after that (10-15, 23-32, 40, 64, 96, 127, 160, 200,
+255) showed **no further change at all** — the display stayed frozen on template 9's list widget for
+the rest of that sweep, all the way through byte value 255.
+
+That raised an obvious question: is 10+ really invalid, or did the device just get confused by rapid
+consecutive template changes and freeze? Ruled out with two **isolated, single-message, fresh-session**
+tests (fresh init, one write, nothing else touched): sending `page_template = 23` alone rendered the
+**default post-connect mixer screen** (as if no custom template had been set at all this session), and
+`page_template = 10` alone did exactly the same. Neither was a leftover cached photo — both were
+captured live, synced directly to the test binary's own "holding for photograph" stdout line (see the
+methodology note below), not to an external timer.
+
+**Conclusion**: `page_template` is not a free 0-255 byte — only a specific allow-listed set of values is
+actually recognized by the firmware (confirmed so far: 0-9, 16-22). Writing an unrecognized value is a
+**silent no-op**: it does not error, does not glitch, and does not reset anything — the display simply
+keeps showing whatever the *last valid* template rendered (or the untouched default screen, if no valid
+template has been set yet this session). This is a materially different failure mode from the earlier
+"switching pageTemplate resets the whole page" behavior (Thirteenth/Fourteenth findings) — that only
+applies to switching between two *valid* templates.
+
+**Methodology note (a real gotcha, not just a footnote)**: capturing a photo by waiting on an external
+signal (a background-task completion notification, a fixed sleep) is not reliable proof of what a test
+rendered, because **the EXIT sequence sent at the end of every `msg_test` run resets the display back to
+its own default appearance** (default title bar, mixer/knobs widget, generic CC numbering). By the time
+an external notification round-trip resolves, the whole process — including its exit — may have already
+finished, and the "photo" ends up showing the post-exit default, not the test's actual write. The fix:
+have the *same* script that sends the SysEx also read the test binary's stdout live and capture the
+instant it prints "Holding for 8s" (or "Sending message N of M" for a multi-step sweep), so the photo is
+synced to a real event in the process itself, never to wall-clock guesses or asynchronous notifications.
+This is also why a naive one-photo-per-value loop that fully restarts the binary per value (paying the
+whole init/hold/exit cost each time) is much slower than necessary for no benefit: a single session can
+send many independent field writes back to back (they don't interfere, per the Thirteenth/Fourteenth
+findings) and only needs one final photo, while a template sweep specifically needs one photo *per*
+step (since template changes visibly replace the whole screen) but still only needs one process/session
+for the whole sweep, not one per value.
+
 ## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a

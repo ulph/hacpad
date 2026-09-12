@@ -169,13 +169,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(messages) = &raw_n {
+        // Configurable via RAWN_DELAY_MS (default 5000ms, long enough to
+        // individually photograph each step). A quick multi-value sweep where
+        // every field is independent (e.g. all writes target the same
+        // template so nothing gets cleared in between) doesn't need that --
+        // override it low. Anything below ~300ms risks the device silently
+        // dropping a message (observed once at 100ms), so don't go lower.
+        let delay_ms: u64 = std::env::var("RAWN_DELAY_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(5000);
         for (i, m) in messages.iter().enumerate() {
             println!("Sending message {} of {} ({} bytes)...", i + 1, messages.len(), m.len());
             default_conn.send(m)?;
-            // Long gap so each step can be individually photographed, not
-            // just the final state -- see the "isolated step" diagnostic in
-            // the protocol notes.
-            sleep(Duration::from_millis(5000));
+            sleep(Duration::from_millis(delay_ms));
         }
         println!("Holding for 8s so we can photograph the screen...");
         sleep(Duration::from_secs(8));
