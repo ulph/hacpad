@@ -1,28 +1,35 @@
 //! hacpad USB Bridge prototype -- Nektar Panorama P1
 //!
-//! Minimal, dependency-free bridge: talks to the P1 over its ALSA rawmidi
-//! device node directly (no external MIDI crate needed). Two jobs:
+//! Talks to the P1 over named ALSA sequencer ports (via the `midir` crate),
+//! matching the real Bitwig driver's two-output-port usage. Two jobs:
 //!
-//!   1. Write to the P1's own screen via vendor SysEx (output/feedback).
-//!   2. Decode incoming Control Change messages from its physical controls
-//!      (input) using the documented CC map.
+//!   1. Decode incoming Control Change messages from its physical controls
+//!      (input) using the documented CC map. **Confirmed working** against
+//!      real hardware.
+//!   2. Write to the P1's own screen via vendor SysEx (output/feedback).
+//!      **Bytes confirmed correct** against the official Nektar driver
+//!      source and sent successfully to real hardware, but the device does
+//!      not currently render them -- see research/panorama-p1-protocol-notes.md
+//!      for the full investigation. Leading hypothesis: the device needs to
+//!      be switched into a DAW-control mode via its own on-device `Setup`
+//!      menu first (untested pending physical access to the unit).
 //!
-//! Protocol facts (SysEx structure, CC map) are written up independently in
-//! research/panorama-p1-protocol-notes.md, credited there to a community
-//! reference (LukeLandry/nektar-panorama-p1-bitwig, no license declared).
-//! This is our own from-scratch implementation of those facts, not a port
-//! of that project's code.
+//! Protocol facts (SysEx structure, CC map, port mapping) are written up in
+//! research/panorama-p1-protocol-notes.md, cross-checked against Nektar's own
+//! official Bitwig driver (`PANORAMA_P1.control.js` / `pnx1.js` / `pnx2.js`)
+//! and, for CC input, a community reference
+//! (LukeLandry/nektar-panorama-p1-bitwig, no license declared, credited there).
+//! This is our own from-scratch implementation of those facts.
 //!
 //! Usage:
-//!     cargo run -- [/dev/snd/midiC1D0]
+//!     cargo run                    # send init, attempt a screen message, listen for CC input
+//!     cargo run -- "some text"     # same, with a custom message
 
 use std::env;
-use std::fs::OpenOptions;
-use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::error::Error;
 use std::time::Duration;
 
-const DEFAULT_DEVICE: &str = "/dev/snd/midiC1D0";
+use midir::{MidiInput, MidiInputPort, MidiOutput, MidiOutputPort};
 
 // --- SysEx protocol ------------------------------------------------------
 // F0 00 01 77 7F 01 ...  F7
@@ -33,90 +40,59 @@ const SYSEX_PREFIX: [u8; 6] = [0xF0, 0x00, 0x01, 0x77, 0x7F, 0x01];
 const SYSEX_END: u8 = 0xF7;
 
 // Lifecycle messages (bytes after the manufacturer prefix, before F7).
+// Confirmed byte-for-byte against the official driver's nektarinit()/nektarexit().
 const INIT_LINUX_ONLY: [u8; 7] = [0x08, 0x01, 0x00, 0x00, 0x01, 0x01, 0x75];
 const INIT_1: [u8; 7] = [0x08, 0x02, 0x00, 0x00, 0x01, 0x01, 0x73];
 const INIT_2: [u8; 7] = [0x09, 0x03, 0x00, 0x00, 0x01, 0x3E, 0x34];
+// Not sent by this simple demo loop (it blocks forever until Ctrl-C kills the
+// process outright, with no clean-shutdown hook) -- kept here, confirmed
+// correct, for whenever the bridge grows a real shutdown path.
+#[allow(dead_code)]
 const EXIT_1: [u8; 7] = [0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x75];
+#[allow(dead_code)]
 const EXIT_2: [u8; 7] = [0x08, 0x02, 0x00, 0x00, 0x01, 0x00, 0x74];
 
-const WRITE: u8 = 0x06;
+const CMD_WRITE_DISPLAY: u8 = 0x06;
 
-// "part" bytes for a display write -- which region of the screen.
-// NOTE: the community reference has two overlapping numbering schemes for
-// this byte (headerLine/messageLine/messageValue/buttonLabels/toggleModeDisplays
-// = 01-05 in one place, pageTitle/controlNames/controlValues/menu = 05-08 in
-// another). Unverified which applies when; button labels (0x04) is the one
-// we've actually sent to the hardware so far (visual confirmation pending
-// better camera focus -- see protocol notes).
-#[allow(dead_code)]
-const PART_HEADER_LINE: u8 = 0x01;
-#[allow(dead_code)]
-const PART_MESSAGE_LINE: u8 = 0x02;
-#[allow(dead_code)]
-const PART_MESSAGE_VALUE: u8 = 0x03;
-#[allow(dead_code)]
-const PART_BUTTON_LABELS: u8 = 0x04;
-#[allow(dead_code)]
-const PART_TOGGLE_MODE_DISPLAYS: u8 = 0x05;
+// The dedicated one-shot "message" page-template constant, confirmed from
+// `PANORAMA_P1.control.js`'s pageTemplate enum (`MESSAGE: 1`) and used by
+// `writeMessageToDisplay()`/`OutputState.prototype.send()`'s message branch.
+// NOT the 02 we originally guessed before finding the official driver.
+const MSG_PAGE_TEMPLATE: u8 = 0x01;
 
-#[allow(dead_code)]
-const LAYOUT_MIXER: u8 = 0x02; // unverified byte value guess; only 0x02 has been tried
+/// Real ports the official driver uses (confirmed via ALSA sequencer port
+/// listing): the default output port (Bitwig's `sendSysex()` with no port
+/// arg) is "Internal"; the one explicit `host.getMidiOutPort(1)` call (used
+/// only for the Linux-only init message) is "Instrument".
+const PORT_INTERNAL: &str = "PANORAMA P1 Internal";
+const PORT_INSTRUMENT: &str = "PANORAMA P1 Instrument";
 
-// Known-good example message (replayed verbatim from the protocol notes --
-// confirmed to transmit without error; visual confirmation on the P1's own
-// screen is still pending better camera focus).
-const EXAMPLE_BUTTON_LABELS_HEX: &str = "F0 00 01 77 7F 01 06 02 04 00 05 00 00 00 00 00 00 01 01 2B 00 02 07 42 72 6F 77 73 65 72 00 03 06 50 72 65 73 65 74 00 04 06 52 65 6D 6F 74 65 00 05 05 50 61 67 65 73 F7";
-
-fn hex_to_bytes(s: &str) -> Vec<u8> {
-    s.split_whitespace()
-        .map(|b| u8::from_str_radix(b, 16).expect("bad hex byte in literal"))
-        .collect()
-}
-
-/// Build one "write text at index" SysEx entry: index, len, ascii bytes.
-fn build_write_entry(index: u8, text: &str, max_len: Option<usize>) -> Vec<u8> {
-    let truncated: &str = match max_len {
-        Some(n) => &text[..text.len().min(n)],
-        None => text,
-    };
-    let mut out = vec![index, truncated.len() as u8];
-    out.extend_from_slice(truncated.as_bytes());
-    out
-}
-
-/// Mirrors the observed shape: WRITE, layout, part, then each entry's bytes
-/// joined by a single 0x00 separator, terminated by F7. Unverified beyond
-/// the one known example message -- treat constructed-from-scratch messages
-/// as a hypothesis to confirm on hardware before trusting them.
-#[allow(dead_code)]
-fn build_display_write(layout: u8, part: u8, entries: &[(u8, &str)]) -> Vec<u8> {
-    let mut body: Vec<u8> = Vec::new();
-    for (i, (index, text)) in entries.iter().enumerate() {
-        if i > 0 {
-            body.push(0x00);
-        }
-        body.extend(build_write_entry(*index, text, None));
-    }
+fn sysex(body: &[u8]) -> Vec<u8> {
     let mut msg = SYSEX_PREFIX.to_vec();
-    msg.push(WRITE);
-    msg.push(layout);
-    msg.push(part);
-    msg.extend(body);
+    msg.extend_from_slice(body);
     msg.push(SYSEX_END);
     msg
 }
 
-fn sysex(payload_after_prefix: &[u8]) -> Vec<u8> {
-    let mut msg = SYSEX_PREFIX.to_vec();
-    msg.extend_from_slice(payload_after_prefix);
-    msg.push(SYSEX_END);
-    msg
+/// The "quick message" one-shot display write (`writeMessageToDisplay` in the
+/// real driver). Simpler than the full per-field page-composition path and
+/// doesn't need live DAW session state to construct -- but as of this
+/// writing, sending it produces no visible change on the device (see
+/// protocol notes: three independently-shaped SysEx messages all had zero
+/// effect, pointing at a device-mode gate rather than a byte-level error).
+fn write_message(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut body = vec![CMD_WRITE_DISPLAY, MSG_PAGE_TEMPLATE, 0x00, 0x00, bytes.len() as u8];
+    body.extend_from_slice(bytes);
+    body.push(0x04); // trailing type/terminator byte before F7, per the real driver
+    sysex(&body)
 }
 
 // --- CC map ---------------------------------------------------------------
-// From research/panorama-p1-protocol-notes.md; transport/nav ordering within
-// their ranges is an unverified guess (source only gave the range and the
-// named functions, not the exact per-CC assignment).
+// Confirmed against real hardware this session (fader/encoder/button CCs
+// verified live); transport/nav ordering within their ranges is still an
+// unverified guess (the reference only gave the range and named functions,
+// not the exact per-CC assignment).
 
 #[derive(Debug)]
 enum CcKind {
@@ -187,104 +163,64 @@ fn decode_cc(cc: u8, value: u8) -> Event {
     }
 }
 
-struct PanoramaP1 {
-    file: std::fs::File,
+fn find_out_port(out: &MidiOutput, needle: &str) -> Result<MidiOutputPort, Box<dyn Error>> {
+    out.ports()
+        .into_iter()
+        .find(|p| out.port_name(p).map(|n| n.contains(needle)).unwrap_or(false))
+        .ok_or_else(|| format!("no MIDI output port matching {needle:?}").into())
 }
 
-impl PanoramaP1 {
-    fn open(path: &str) -> std::io::Result<Self> {
-        // O_NONBLOCK on the read side would complicate a simple blocking
-        // demo loop, so we open plain read+write; ALSA rawmidi accepts a
-        // raw MIDI byte stream directly, no ioctl setup needed for this.
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(0) // explicit: no O_NONBLOCK
-            .open(path)?;
-        Ok(Self { file })
-    }
-
-    fn send_init(&mut self, linux: bool) -> std::io::Result<()> {
-        if linux {
-            self.file.write_all(&sysex(&INIT_LINUX_ONLY))?;
-        }
-        self.file.write_all(&sysex(&INIT_1))?;
-        self.file.write_all(&sysex(&INIT_2))?;
-        Ok(())
-    }
-
-    fn send_exit(&mut self) -> std::io::Result<()> {
-        self.file.write_all(&sysex(&EXIT_1))?;
-        self.file.write_all(&sysex(&EXIT_2))?;
-        Ok(())
-    }
-
-    fn write_known_button_labels(&mut self) -> std::io::Result<()> {
-        let msg = hex_to_bytes(EXAMPLE_BUTTON_LABELS_HEX);
-        self.file.write_all(&msg)
-    }
-
-    /// Blocking read loop: minimal running parser for Control Change
-    /// (0xBn) messages, passing through/ignoring SysEx (0xF0 ... 0xF7)
-    /// since input is documented as CC-only, but we don't want to choke
-    /// if the device ever echoes one back.
-    fn read_events<F: FnMut(Event)>(&mut self, mut on_event: F) -> std::io::Result<()> {
-        let mut buf = [0u8; 64];
-        let mut msg: Vec<u8> = Vec::with_capacity(3);
-        let mut in_sysex = false;
-        loop {
-            let n = self.file.read(&mut buf)?;
-            if n == 0 {
-                continue;
-            }
-            for &b in &buf[..n] {
-                if in_sysex {
-                    if b == SYSEX_END {
-                        in_sysex = false;
-                    }
-                    continue;
-                }
-                if b == 0xF0 {
-                    in_sysex = true;
-                    continue;
-                }
-                msg.push(b);
-                if msg.len() >= 3 && (0xB0..=0xBF).contains(&msg[0]) {
-                    on_event(decode_cc(msg[1], msg[2]));
-                    msg.clear();
-                } else if msg.len() == 1 && msg[0] < 0x80 {
-                    // stray data byte with no status -- drop it
-                    msg.clear();
-                } else if msg.len() > 3 {
-                    msg.clear();
-                }
-            }
-        }
-    }
+fn find_in_port(inp: &MidiInput, needle: &str) -> Result<MidiInputPort, Box<dyn Error>> {
+    inp.ports()
+        .into_iter()
+        .find(|p| inp.port_name(p).map(|n| n.contains(needle)).unwrap_or(false))
+        .ok_or_else(|| format!("no MIDI input port matching {needle:?}").into())
 }
 
-impl Drop for PanoramaP1 {
-    fn drop(&mut self) {
-        let _ = self.send_exit();
-    }
-}
+fn main() -> Result<(), Box<dyn Error>> {
+    let text = env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let text = if text.is_empty() { "hacpad".to_string() } else { text };
 
-fn main() -> std::io::Result<()> {
-    let device = env::args().nth(1).unwrap_or_else(|| DEFAULT_DEVICE.to_string());
-    println!("Opening {device} ...");
-    let mut p1 = PanoramaP1::open(&device)?;
+    let internal_out = MidiOutput::new("hacpad-p1-internal")?;
+    let internal_port = find_out_port(&internal_out, PORT_INTERNAL)?;
+    let mut internal = internal_out.connect(&internal_port, "hacpad-p1-internal-conn")?;
+
+    let instrument_out = MidiOutput::new("hacpad-p1-instrument")?;
+    let instrument_port = find_out_port(&instrument_out, PORT_INSTRUMENT)?;
+    let mut instrument = instrument_out.connect(&instrument_port, "hacpad-p1-instrument-conn")?;
+
+    // Real driver also opens MIDI input on both ports; confirmed to make no
+    // difference to the display-write question, but this is the "connected
+    // like a real DAW" baseline going forward, and it's how CC input arrives.
+    let input = MidiInput::new("hacpad-p1-input")?;
+    let input_port = find_in_port(&input, PORT_INTERNAL)?;
 
     println!("Sending init sequence...");
-    p1.send_init(true)?;
+    instrument.send(&sysex(&INIT_LINUX_ONLY))?;
+    std::thread::sleep(Duration::from_millis(50));
+    internal.send(&sysex(&INIT_1))?;
+    std::thread::sleep(Duration::from_millis(50));
+    internal.send(&sysex(&INIT_2))?;
     std::thread::sleep(Duration::from_millis(200));
 
-    println!("Writing test button labels (Browser/Preset/Remote/Pages, known-good example)...");
-    p1.write_known_button_labels()?;
+    println!("Attempting screen message: {text:?} (protocol confirmed correct; device rendering still blocked, see protocol notes)");
+    internal.send(&write_message(&text))?;
 
-    println!("Listening for CC input (Ctrl-C to stop and send exit sequence)...");
-    p1.read_events(|event| {
-        println!("{event:?}");
-    })?;
+    println!("Listening for CC input (Ctrl-C to stop)...");
+    let _in_conn = input.connect(
+        &input_port,
+        "hacpad-p1-input-conn",
+        move |_stamp, msg, _| {
+            if msg.len() >= 3 && (0xB0..=0xBF).contains(&msg[0]) {
+                println!("{:?}", decode_cc(msg[1], msg[2]));
+            }
+        },
+        (),
+    )?;
 
-    Ok(())
+    // Block forever (Ctrl-C to exit); real cleanup on exit would send
+    // EXIT_1/EXIT_2 here, omitted for this simple blocking demo loop.
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
 }
