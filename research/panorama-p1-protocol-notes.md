@@ -1338,6 +1338,26 @@ counted). This means the highest-value approach is exactly what was done here: f
 call (`sendSysex`, a `DISPLAY_ID`/`pageTemplate` numeric literal, a CC base value already confirmed on
 hardware) and read outward from it, rather than trying to rename the whole file uniformly.
 
+### Established convention: the "hacpad" resting baseline
+
+After trying a fuller compose-mode design (title bar + big font + tabs + numbered knob content), direct
+feedback settled on something much simpler: the device's resting/idle state between tests should be the
+plain `pageTemplate=1` **message** overlay (see "Seventh finding") showing just the literal text
+`"hacpad"` -- white text on the message mode's dark background, no colored chrome, no knob/fader content
+competing for attention. This was explicitly preferred over the compose-mode mixer view for being
+"much more evident."
+
+**How to set it**: a single raw SysEx write, no compose fields needed --
+```
+F0 00 01 77 7F 01 06 01 00 00 06 68 61 63 70 61 64 04 F7
+```
+(`06 01 00 00 06 "hacpad" 04` -- the confirmed `writeMessageToDisplay` shape from the Seventh finding,
+`06` cmd, `01` = pageTemplate MESSAGE, length 6, the ASCII text, `04` terminator, before `F7`). Via
+`msg_test`, this is just `msg_test hacpad` (its default no-flag mode already builds this exact shape).
+Going forward, reset the device to this state between isolated tests instead of the older
+full compose-mode JSON baseline (title bar/big font/tabs/names/values) -- simpler, and it's what's
+actually preferred as the resting look.
+
 ## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
