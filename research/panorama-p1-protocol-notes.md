@@ -1232,6 +1232,112 @@ message only does something when a specific precondition is met that a bare repl
 (e.g. the device believing it's mid-browser-navigation, a state we have no way to induce over MIDI
 alone) — left as a genuine open question, not resolved either way.
 
+### Twenty-second finding: 0x0B's real source context, and a clean negative result for every variant tried
+
+Asked directly where the "Launcher" 0x0B string actually came from. Precise citation: **`PANORAMA_P1.control.js`**
+(Bitwig's own bundled Panorama P1 driver, from Nektar's official
+`Panorama_P1_P4_P6_Bitwig_Studio_Integration_Files_Linux_2023-06` package), found on disk at
+`~/Downloads/support_871eda6c83a540c70/.../Nektar/PANORAMA_P1.control.js`. The exact call site (verbatim,
+appears 3 times — lines 135, 159, 415):
+```js
+Z810DEA1F33EE35023.onView=function(){Z81136C4863E8BC4AF("F0 00 01 77 7F 01 0B 00 0F 00 08 4C 61 75 6E 63 68 65 72 00 01 02 0F 00 F7")};
+```
+`Z81136C4863E8BC4AF` is confirmed (line 12) to be a thin wrapper: `function Z81136C4863E8BC4AF(a){sendSysex(a)}` —
+a genuine outbound-to-hardware call, not internal-to-Bitwig.
+
+**Correction to the working theory**: 0x0B is not fundamentally an "LED" command — grepping every literal
+0x0B string in the file turns up a dozen near-identical short payloads
+(`0B 00 0F 00 00 00 01 02 <selector> 00`, selectors seen: `05, 07, 28, 29, 2B(00), 2B(02), 4F, 50, 51`,
+plus one on a different sub-header `0B 00 2B 00` with selector `51`, and two that carry literal text
+instead of just a selector byte — `"Launcher"` and `"Tab"` (`54 61 62`)) scattered through
+`focusPanelAbove`/browser-open/browser-close/macro-view-toggle logic. "Launcher" is the odd one out in
+carrying text; everything else is a bare selector byte. This looks like a general **navigation/panel-
+coordination signal** to the device, not specifically an LED command.
+
+**Tested all 11 distinct variants against real hardware** (blank-first, fresh process per value, wide
+camera framing, exit code checked — all `returncode=0`, no errors, so every one transmits cleanly).
+**Result: no variant produced any observable effect** — screen content, LED states, and button states
+were pixel-identical across every single test (confirmed by direct photo comparison, e.g. `sel07` and
+`tab` are indistinguishable). The only thing visible in these photos (a stray `MIDI CC 40` readout and
+an odd vertical-bar widget) was leftover residual state from earlier incidental physical interaction with
+the device during testing (see the Twentieth finding's confound note), not caused by anything sent here.
+
+**Working conclusion**: either (a) 0x0B drives a physical element this specific P1 unit doesn't have —
+plausible, since the source is shared across P1/P4/P6 and higher-tier siblings may have hardware (a
+browser-encoder LED ring, a dedicated indicator) the P1 lacks — or (b) these messages only have an
+effect when paired with internal driver state we can't reproduce via a bare replay (e.g. the actual
+Bitwig browser panel being genuinely open in the DAW, `gBrowserOpen` mirroring real host state). Left
+open; not resolved either way. Item 4 (0x0B) is now considered closed as "tested exhaustively, no
+observable device-side effect."
+
+### Twenty-third finding: reading `OutputState.prototype.send()` directly — the real flush logic, confirmed against our own hardware findings byte-for-byte
+
+Per the request to work outward from known Bitwig SDK anchors rather than starting from CC/plugin
+strings (the reverse of the old "panomod" approach): traced `sendSysex`/`sendChannelController`/`sendMidi`
+back to their call sites and read the real `OutputState.prototype.send()` function
+(`PANORAMA_P1.control.js:64-71`) end to end — the actual flush/diff method that turns the driver's
+internal page state into the SysEx and CC traffic we've been reverse-engineering blind all session. Huge
+payoff: it independently confirms nearly everything found by hardware testing, and resolves several open
+questions outright.
+
+**The `pageTemplate` and `DISPLAY_ID` enums, extracted verbatim from source** (`Z8114CB0CF3E757C0C` and
+`DISPLAY_ID` respectively — object property *names* are hashed just like everything else, so the real
+English names aren't recoverable this way, but the **numeric values are**, and they match our
+independently-confirmed set exactly, digit for digit):
+```
+pageTemplate: {0, 1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 22}   -- matches our confirmed set exactly
+DISPLAY_ID:   {0, 1, 2, 3, 4, 5, 6, 7, 8}                       -- matches our confirmed set exactly
+```
+
+**Confirmed exactly, byte-for-byte, from source** (things we'd only inferred from hardware before):
+- `displayId 2`/`3` are literally `currentParameterInfo`/`currentParameterValue` in the driver's own
+  internal variable names (`Z810A716763F1A2A63`/`Z810A88C163F19D2AD`) -- exactly matching the Twelfth/
+  Fifteenth findings' guess at their real names, not just a plausible-sounding label we invented.
+- `displayId 7` (`ctrlElementValue`) really is shared with `faderElementValue`, sent as the SAME
+  `DISPLAY_ID.7` compose block, with `ctrlElementValue` using indices `1..8` and `faderElementValue`
+  using indices `9..16` (`textEntry(1+b+8, ...)`) -- confirms the "shared with faderElementValue at
+  indices 9-17" note that was previously only inferred from source comments, now confirmed from the
+  actual index arithmetic.
+- `displayId 0` (`padState`) is only ever sent `if(pageTemplate===21||pageTemplate===22)` -- exactly
+  matching our hardware-confirmed template gating -- and it's sent via `padEntry`, which writes a single
+  **raw byte value** (`uint7ToHex(1)` length, one value byte), never text. Confirms item 8 of the
+  checklist directly: pad_state is genuinely a small numeric-enum field (backed by a 9-value enum,
+  `Z8114B1CC53E76CFF0`, used for on/off/recording/queued clip states), not a text field at all -- no
+  further "try binary payloads" testing needed, source settles it.
+- **Item 7 (menu_button type/highlight flag) resolved from source**: the per-button highlight ("on")
+  state is sent as a **plain Control Change**, `CC.<base>+buttonIndex` where `<base>=106` -- exactly the
+  CC range `led_test.rs` already had as a candidate (confirmed independently from source, not just
+  guessed from the driver's call-site clustering). It is NOT part of the SysEx text at all. Separately,
+  the per-button **type** (`menuButtonType`, a 2-value enum) is sent via a distinct, never-before-tried
+  SysEx shape: a `menuButtonTypesEntry` -- **index `0`** (not a normal 1-based text index), length `5`,
+  followed by 5 raw type-enum bytes (0 or 1) -- sent as its own compose entry *before* the 5 normal
+  1-based text-label entries in the same `displayId 4` message. This is a real, deliberate use of index
+  0 (relevant to checklist item 5, "compose-entry malformation... index 0") -- it's not malformed at
+  all, it's how the type array is distinguished from the per-button label entries.
+- **Genuine surprise: `displayId 8` (our "mystery box," see the Nineteenth finding) is never referenced
+  anywhere in `OutputState.prototype.send()`.** It exists in the `DISPLAY_ID` enum (value 8) but this
+  driver version never actually sends it during normal operation. The box we found on real hardware is
+  a field the P1's firmware clearly supports, but that Bitwig's own shipped driver never exercises --
+  genuinely undocumented from Bitwig's own perspective, not just missed by us. (Could be reserved for a
+  future feature, a different DAW's driver, or a different firmware/driver version than the one
+  archived here.)
+
+**Follow-up hardware test, prompted by finding the CC-106 mapping in source**: re-ran `led_test on` with
+the bottom tab row actually populated with real labels this time (previously always tested against a
+blank/default tab row) and the now-wide camera framing. **Still no visible effect** from CC 106-110 --
+neither the on-screen tab row nor the 5 physical round buttons directly below the display show any
+change. This is now a well-supported negative result (confirmed against source-verified CC numbers, not
+a guess), not an untested gap.
+
+**Methodology note for future source-diving**: this file's obfuscation is *not* uniform -- the top-level
+Bitwig Controller API glue (`transport`, `application`, `cursorTrack`, `host`, and dozens of `X.setter()`
+state variables like `transportPosition`, `punchIn`, `overdub`) are already in **plain, readable names**.
+Only Nektar's own custom display/page/menu logic layered on top of that API -- exactly the part most
+relevant to this project -- uses the opaque `Z81[A-F0-9]+` hash-style naming (317 distinct identifiers
+counted). This means the highest-value approach is exactly what was done here: find a well-known SDK
+call (`sendSysex`, a `DISPLAY_ID`/`pageTemplate` numeric literal, a CC base value already confirmed on
+hardware) and read outward from it, rather than trying to rename the whole file uniformly.
+
 ## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
