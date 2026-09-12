@@ -203,7 +203,8 @@
       <div id="led-panel"></div>
     </fieldset>
 
-    <div id="push-status" style="font-size:11px; color:#888; margin-bottom:6px;">not yet pushed</div>
+    <div id="push-status" style="font-size:11px; color:#888; margin-bottom:2px;">not yet pushed</div>
+    <div id="last-sent" style="font-size:10px; color:#666; margin-bottom:6px;">no sends yet</div>
     <button id="full-sync-btn" type="button" style="margin-bottom:10px;">Send full state (bypass diff)</button>
   </div>
 </div>
@@ -433,9 +434,18 @@ function renderSimulator() {
 const WS_PORT = 8091;
 let ws = null;
 let wsReady = false;
+// applyScreenPush's "don't stomp an in-progress edit" guard checks
+// document.activeElement -- but nothing is meaningfully "in progress" the
+// very first time a fresh connection hands us its state, and index.html no
+// longer has any hardcoded field defaults of its own (see default_state() in
+// service.rs) -- if that very first sync is ever skipped (stray focus in
+// #controls at load, e.g. browser focus restore after a reload) every field
+// stays blank with nothing to fall back to. Force-apply once per connection.
+let syncedThisConnection = false;
 
 function connectService() {
   ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+  syncedThisConnection = false;
   const status = el('push-status');
   ws.addEventListener('open', () => {
     wsReady = true;
@@ -451,7 +461,8 @@ function connectService() {
   ws.addEventListener('error', () => ws.close());
   ws.addEventListener('message', (ev) => {
     try {
-      applyScreenPush(JSON.parse(ev.data));
+      applyScreenPush(JSON.parse(ev.data), !syncedThisConnection);
+      syncedThisConnection = true;
     } catch (e) { /* ignore malformed */ }
   });
 }
@@ -462,13 +473,17 @@ connectService();
 // and only send a message for a field whose current form value differs from
 // that -- editing the title bar never re-sends names/values/tabs, and vice
 // versa. `layout` (page template) gets special handling: switching it is
-// confirmed to clear per-template content fields (names/values/bigfont/tabs)
-// on the device regardless of whether the switching message touches them,
-// while the title bar is "global chrome" that survives the switch -- so a
-// template-only change is carried on a title-bar write (the one field safe
-// to resend unconditionally) and nothing else, and our bookkeeping for the
-// content fields is invalidated (not resent) so the *next* edit to any of
-// them is treated as a real change instead of being skipped as "unchanged".
+// confirmed to clear PER-TEMPLATE CONTENT fields (names/values/padState/
+// pageLabels -- displayId 6/7/0/5) on the device even when the switching
+// message never touches them, while title_bar/big_font/current_value/
+// menu_button (displayId 1/2/3/4) are "global chrome" that survive the
+// switch untouched ("Fourteenth finding"). So a template change resends the
+// title bar (chrome, harmless either way) AND immediately re-supplies
+// whatever content this tab currently holds for the cleared fields --
+// otherwise the mockup would keep showing them while the real device (and
+// a fresh client's view of it) had actually gone blank, which is exactly
+// what prompted this: switching templates otherwise looks like "it all
+// disappeared" on the real hardware even though nothing here is broken.
 let lastSent = {
   layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null,
   currentValue: null, pageLabels: null, padState: null, menuItems: null, menuHighlight: null,
@@ -504,6 +519,10 @@ function currentState() {
 function sendField(layout, fields) {
   if (!wsReady) return;
   ws.send(JSON.stringify(Object.assign({ layout }, fields)));
+  // Visible confirmation of what the diff logic actually decided to send,
+  // and when -- so "did my edit actually go out" is never a guess.
+  const sentAt = new Date().toLocaleTimeString();
+  el('last-sent').textContent = `sent @ ${sentAt}: ${Object.keys(fields).join(', ')}`;
 }
 
 let pushTimer = null;
@@ -516,10 +535,25 @@ function pushToDevice() {
     const layoutChanged = layoutKnown && cur.layout !== lastSent.layout;
 
     if (layoutChanged) {
-      sendField(cur.layout, { titleBar: cur.titleBar });
+      // Re-supply the per-template content fields on the new template too --
+      // the real device just cleared them as a side effect of the switch, so
+      // without this the mockup (still showing this tab's current input
+      // values) would drift from what the device actually has, which reads
+      // as "switching templates wiped everything." Chrome fields
+      // (bigfont/currentValue/titleBar/tabs) survive the switch already, so
+      // only titleBar is resent among those (harmless, and it's the field
+      // that's always safe to resend regardless).
+      const fields = { titleBar: cur.titleBar };
+      if (cur.names.some(Boolean)) fields.names = cur.names;
+      if (cur.values.some(Boolean)) fields.values = cur.values;
+      if (cur.padState.length) fields.padState = cur.padState;
+      if (cur.pageLabels.some(Boolean)) fields.pageLabels = cur.pageLabels;
+      sendField(cur.layout, fields);
       lastSent = {
-        layout: cur.layout, titleBar: cur.titleBar, bigfont: null, names: null, values: null, tabs: null,
-        currentValue: null, pageLabels: null, padState: null, menuItems: lastSent.menuItems, menuHighlight: lastSent.menuHighlight,
+        layout: cur.layout, titleBar: cur.titleBar,
+        bigfont: lastSent.bigfont, currentValue: lastSent.currentValue, tabs: lastSent.tabs,
+        names: cur.names, values: cur.values, padState: cur.padState, pageLabels: cur.pageLabels,
+        menuItems: lastSent.menuItems, menuHighlight: lastSent.menuHighlight,
         message: lastSent.message, ledsOn: lastSent.ledsOn,
       };
       return;
@@ -615,10 +649,12 @@ renderSimulator();
 // device's last-known state from ANY client, not just this tab's own edits.
 let knownHtmlMtime = null;
 
-function applyScreenPush(push) {
+function applyScreenPush(push, force) {
   if (!push) return;
-  // Don't stomp on an in-progress edit in this tab.
-  if (document.activeElement && document.activeElement.closest('#controls')) return;
+  // Don't stomp on an in-progress edit in this tab -- except the very first
+  // sync of a fresh connection (force=true from connectService()), which
+  // must always land or every field stays blank with nothing to fall back to.
+  if (!force && document.activeElement && document.activeElement.closest('#controls')) return;
   if (push.layout !== undefined) el('in-layout').value = push.layout;
   if (push.bigfont !== undefined) el('in-bigfont').value = push.bigfont;
   if (push.titleBar) {

@@ -121,7 +121,7 @@ fn default_state() -> ScreenUpdate {
         pad_state: { let mut v = vec![0u8; 16]; v[0] = 1; v[1] = 1; v },
         menu_items: (1..=8).map(|i| format!("Item{i}")).collect(),
         menu_highlight: Some(3),
-        message: String::new(), // deliberately empty: it's a whole-screen takeover, not additive
+        message: "hacpad".to_string(), // the established resting-baseline text (see the "hacpad" note in the protocol notes)
         leds_on: Some(vec![16, 18, 20, 22, 106, 108, 110, 80, 85]), // arbitrary mix so both on/off states show
     }
 }
