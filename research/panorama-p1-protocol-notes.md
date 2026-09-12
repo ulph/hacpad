@@ -766,6 +766,97 @@ Layer Container** (channel-strip/layer semantics naturally fit a fader-per-layer
 row wasn't visible in this framing — not clear whether it's actually absent for this template or just
 cropped out of frame.
 
+### Template 19 — fader layout again, continuous row (not split), bottom tabs visible
+
+Same test pattern (title bar + 8 `ctrlElementName` entries). **Confirmed**: title bar works
+identically (`T19A`/`T19B`/`T19C`). Content area shows all 8 faders in one continuous row (not split
+into two groups of 4 like template 18), with `N1`-`N8` labels beneath each. The bottom tab row
+(`Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup`) and the big-font `MIDI CC 3` readout are both
+visible here (confirming template 18's missing tab row was just camera framing, not a real absence —
+untouched fields like the big-font readout keep showing their native live value when we don't write to
+them). Broadly similar to 16/17/18: title bar and name-label fields behave consistently, only the
+specific widget/layout cosmetics differ per template.
+
+### Template 20 — same as 19
+
+Same test pattern, essentially identical result to template 19 (continuous 8-fader row, title bar and
+name labels both working, bottom tabs and big-font readout visible). No distinguishing cosmetic
+difference found from this probe alone.
+
+### Template 21 — a 4×4 pad grid (Drum Machine Container)
+
+Same test pattern. **Confirmed, distinctly different again**: the content area shows a **4×4 grid of
+pads**, rows labeled `A`/`B`/`C`/`D` (standard drum-machine bank convention), 4 columns. Our 8
+`ctrlElementName` entries (only indices 1-8 sent) filled the **bottom two rows only** (`A`: `N1 N2 N3
+N4`, `B`: `N5 N6 N7 N8`), leaving rows `C`/`D` empty — consistent with a real 16-pad grid where we just
+didn't supply entries for indices 9-16. Title bar worked identically. This is a strong match for
+**Drum Machine Container** (16 pads = `padState`/`padValue`, `displayId 0`, matches the driver's own
+pad-page field sizing).
+
+### Template 22 — same pad-grid family as 21
+
+Same test pattern, same pad-grid layout as template 21 (rows labeled, our 8 entries filling two rows,
+title bar identical). Not distinguished from 21 by this probe; likely a closely related pad-based page
+(e.g. a second drum-container variant, or Clip Launcher reusing the same grid widget for clip
+slots — the source's `Z810DEA1F33EE35023` page object had both `CLIPS`/`SCENES` sub-modes and pad
+handling, consistent with 21/22 being two faces of the same grid-based page).
+
+### Template 3 — Transport Launcher (confirmed identity from source)
+
+Same test pattern. **Confirmed, different again**: content area shows two labeled bars `L:` / `R:`
+(likely loop left/right locator positions, matching the Transport page's known `pageLabels` fields —
+`transportInPosition`/`transportOutPosition`/`transportPosition` from the earlier-read
+`updateOutputState`), with our 8 `ctrlElementName` entries filling a 2-row × 4-column grid beneath.
+Title bar identical. This is the one template whose real identity we already had direct source
+evidence for (`a.pageTemplate=Z8114CB0CF3E757C0C.Z81081794D3F409C65` inside the Transport Launcher's
+`updateOutputState`) — the rendered layout is consistent with that.
+
+### Template 4 — a single fader plus a vertical bulleted list
+
+Same test pattern. **Confirmed, distinctly different**: one tall fader bar on the left, and our
+`ctrlElementName` entries rendered as a **vertical bulleted list** on the right (`N1`-`N5` visible,
+each with a small dot indicator; `N6`-`N8` likely present but cropped below frame). Reads like a
+menu/preset-list style page — single-value-plus-list, unlike any of the grid/fader-bank layouts seen
+so far. Title bar identical.
+
+### Template 5 — clean 2×4 button grid, no fader/knob widgets
+
+Same test pattern. **Confirmed, different again**: a simple 2-row × 4-column grid of flat button-style
+labels (`N1`-`N4` top row, `N5`-`N8` bottom row), no fader bars or knob dials visible at all — the
+plainest layout tested so far. Matches the earlier source grep showing template 5 used inside the
+Instrument page's macro/envelope sub-view branch.
+
+### Template 0 — confirmed genuine "reset" sentinel, not a real page
+
+Same test pattern. Title bar still worked (`TT0A`/`TT0B`/`TT0C`). But the `ctrlElementName` write (8
+entries, `N1`-`N8`) had **no visible effect at all** — the content area just showed the native default
+fader view with plain channel numbers (`1`-`8`), no custom text anywhere. Confirms template 0 really is
+just the "unknown/reset" sentinel its name suggests, not a displayable page — the firmware falls back
+to its own default rather than honoring composed field content for this one value.
+
+### Summary: all 13 page-template values now probed
+
+| Template | Layout confirmed | Likely identity |
+|---|---|---|
+| 0 | reset sentinel, ignores field writes | none (internal state only) |
+| 1 | one-shot message overlay (see Seventh finding) | `MESSAGE`, unused by real driver |
+| 2 | (title bar untested) — sets bottom menu-button row | generic browser/menu |
+| 3 | `L:`/`R:` bars + 2×4 grid | Transport Launcher (confirmed from source) |
+| 4 | 1 fader + vertical bulleted list | menu/preset-list style |
+| 5 | plain 2×4 button grid, no fader/knob widgets | Instrument macro/envelope sub-view |
+| 16 | 4×2 knob grid | Mixer (default page on connect) |
+| 17 | same knob grid as 16 | (not distinguished from 16 yet) |
+| 18 | 8 faders split into two groups of 4 | Instrument Layer Container |
+| 19 | 8 faders, one continuous row | (not distinguished from 20) |
+| 20 | same as 19 | (not distinguished from 19) |
+| 21 | 4×4 pad grid (rows A-D) | Drum Machine Container |
+| 22 | same pad-grid family as 21 | Clip Launcher / second drum variant |
+
+`displayId 1` (titleBar, 3 segments) and `displayId 6` (ctrlElementName, up to 8 slots) behave
+consistently across every real template (2-22) — only the surrounding widget chrome (knobs vs. faders
+vs. pads vs. list) differs per template, confirming the Eleventh-finding theory: content fields are
+uniform, the DAW-facing protocol never touches which *widget* gets drawn, only what text goes in it.
+
 ### `main.rs` integration note: switching pageTemplate resets the page
 
 Tried wiring `write_title_bar()` into the real `panorama-bridge` binary as its startup branding,
