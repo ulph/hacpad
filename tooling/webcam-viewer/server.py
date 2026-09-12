@@ -29,6 +29,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import panorama_midi
+
 DEVICE = sys.argv[1] if len(sys.argv) > 1 else "/dev/video0"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8090
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +38,16 @@ INDEX_HTML = os.path.join(HERE, "index.html")
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
 LOGO_PNG = os.path.join(ASSETS_DIR, "logo.png")
+
+# Best-effort: the simulator's live-push-to-device feature just won't work
+# (POST /update_screen returns an error) if the P1 isn't connected -- doesn't
+# block the webcam feed or the rest of the page from working.
+panorama_link = panorama_midi.PanoramaLink()
+try:
+    panorama_link.connect()
+    print("Panorama P1 MIDI link connected -- simulator edits will push to the real device.")
+except Exception as e:
+    print(f"Panorama P1 MIDI link not available ({e}) -- simulator will preview only, no live push.")
 
 
 def find_logo_txt():
@@ -138,9 +150,46 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
+        elif self.path == "/update_screen":
+            self._handle_update_screen()
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _handle_update_screen(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b"{}"
+        try:
+            data = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            data = {}
+
+        if not panorama_link.connected:
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":false,"error":"Panorama P1 not connected"}')
+            return
+
+        with state_lock:
+            STATE["last_screen_push"] = data
+
+        try:
+            panorama_link.update_screen(
+                layout=data.get("layout", "knobs"),
+                title_bar=data.get("titleBar", ["", "", ""]),
+                names=data.get("names", []),
+                values=data.get("values", []),
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode())
 
     def _serve_index(self):
         try:

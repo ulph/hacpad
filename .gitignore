@@ -1,3 +1,4 @@
 .claude/settings.local.json
 target/
 tooling/webcam-viewer/server.log
+__pycache__/

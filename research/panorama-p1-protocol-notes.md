@@ -805,6 +805,18 @@ didn't supply entries for indices 9-16. Title bar worked identically. This is a 
 **Drum Machine Container** (16 pads = `padState`/`padValue`, `displayId 0`, matches the driver's own
 pad-page field sizing).
 
+### Follow-up on template 21: `displayId 0` (padState) does NOT label the other 8 pads
+
+Good question raised: only 8 of the 16 pads got labels (`ctrlElementName`, `displayId 6`, only has 8
+slots) — is there a way to label the other 8? Tested the obvious candidate: `displayId 0` (`padState`,
+confirmed 16 slots from the driver's own `initArray(-1, 16)` reset code) with 16 text entries
+(`P1`..`P16`). **Result: no visible effect at all** — the pads kept showing whatever `ctrlElementName`
+had last set (still `N1`-`N8` from an earlier test, unchanged), not our new `P1`-`P16` text anywhere.
+So `padState` is not a text field — consistent with its name, it's almost certainly a boolean-ish
+on/off/lit indicator per pad, not a label. **Confirmed conclusion: this protocol has no discovered way
+to put text on the top 8 pads** — only the bottom two rows (indices 1-8, via `ctrlElementName`) are
+labelable at all.
+
 ### Template 22 — same pad-grid family as 21
 
 Same test pattern, same pad-grid layout as template 21 (rows labeled, our 8 entries filling two rows,
@@ -868,6 +880,46 @@ to its own default rather than honoring composed field content for this one valu
 consistently across every real template (2-22) — only the surrounding widget chrome (knobs vs. faders
 vs. pads vs. list) differs per template, confirming the Eleventh-finding theory: content fields are
 uniform, the DAW-facing protocol never touches which *widget* gets drawn, only what text goes in it.
+
+### Follow-up on template 18: it actually has 16 name slots, not 8
+
+Good catch raised: the first template-18 test only sent 8 `ctrlElementName` entries — was that the
+real limit, or an artifact of only testing 8? Resent with 16 entries (`X1`..`X16`, indices 1-16).
+**Result: all 16 rendered** — each of the 8 fader bars now shows **two stacked labels** (`X1` above
+`X5`, `X2` above `X6`, `X3`/`X7`, `X4`/`X8` in the left group; `X9`/`X13`, `X10`/`X14`, `X11`/`X15`,
+`X12`/`X16` in the right group). So template 18's `ctrlElementName` field genuinely has **16 usable
+slots**, not 8 — the earlier test simply hadn't sent enough entries to reveal the second label row.
+Correcting the summary table below accordingly.
+
+### Follow-up on template 4: genuinely capped at 5, not under-tested
+
+Same check as template 18: resent with 16 entries (`Y1`..`Y16`). **Result: still only 5 visible**
+(`Y1`-`Y5`), unchanged from the original 8-entry test. Unlike template 18, this is a **real capacity
+limit** for this widget (or at least a fixed visible-window size with no observed way to scroll it via
+plain field writes) — not an artifact of under-testing.
+
+### Thirteenth finding: writes are partial updates — unaddressed slots stay stale, not blanked
+
+A pattern visible across several tests now, worth stating explicitly: **writing to a field only ever
+touches the indices you actually send** — every other slot keeps showing whatever it last held,
+whether that's real content from an earlier write in the same session or the template's own default.
+Concretely: the `displayId 0` (padState) test above left the pads showing `N1`-`N8` from a *previous,
+unrelated* test on the same template, completely unaffected by the new (ineffective) write. This is
+consistent with the driver's own diffing design (`OutputState.prototype.send()` only sends indices
+that changed since the last flush) — but importantly, **this is real, observable firmware behavior,
+not just a JS-side optimization we could ignore**: the device itself appears to hold independent
+per-slot state, and a write that doesn't mention a slot leaves it untouched.
+
+**The only thing that clears everything is switching `pageTemplate`** (confirmed earlier — switching
+resets the whole page via what looks like the same `resetOutputToUnknown()` the real driver calls on a
+template change). Within one template, there is no observed "clear all slots" write — a
+genuinely-blank screen requires either a template switch or explicitly writing an empty string to
+every slot you care about.
+
+**Consequence for hacpad**: don't assume a partial write leaves the rest of the screen blank — it
+leaves the rest of the screen as whatever was there before, which may be stale content from a
+different logical "screen" you drew earlier in the same template. Any code that wants a clean slate
+should either switch templates or explicitly blank every slot it isn't setting.
 
 ### `main.rs` integration note: switching pageTemplate resets the page
 
