@@ -422,13 +422,11 @@ confirmed now) are working against real hardware.
 3. Investigate the device's reply bytes further (`7F 02` instead of the `7F 01` we sent, and the
    checksum-like last byte shifting by 1) — may be worth understanding, though not blocking.
 
-## Sixth finding: multi-line text and a filled logo banner both confirmed
+## Sixth finding: multi-line text confirmed -- correction below (see Seventh finding)
 
 Once the port fix landed, tested further directly on hardware:
-- **Embedded `\n` (0x0A) line breaks are honored** — a 3-line message rendered as 3 separate lines on
-  screen (not literally, e.g., dropped or shown as a control character).
-- **A full bordered ASCII logo banner** (7 lines: top/bottom `#` borders, blank padding lines, "HACPAD"
-  and "usb bridge" centered) rendered correctly and legibly, confirmed by webcam photo.
+- **Embedded `\n` (0x0A) bytes are honored** as a segment delimiter (not dropped, not shown as a
+  literal control character).
 - **Resending the same write on a timer causes a visible flicker for no benefit** — a single send
   persists on screen fine (this was already known from the repeated-write hypothesis test earlier, but
   is now confirmed as the right behavior going forward rather than a leftover test artifact).
@@ -436,6 +434,105 @@ Once the port fix landed, tested further directly on hardware:
 - `main.rs` (the real `panorama-bridge` binary) was updated with the corrected port mapping and
   smoke-tested end-to-end: init → write "hacpad bridge" → confirmed rendered on screen via webcam,
   CC-input listener still running normally alongside it.
+
+**Correction:** an early 7-line bordered banner test ("HACPAD" / "usb bridge" framed in `#` borders)
+was initially described here as "rendered correctly and legibly" in a normal horizontal multi-line
+layout. Re-examined more carefully against later tests (below): it was actually rendering in the same
+per-segment rotated-column layout as everything else, and only *looked* like a normal horizontal block
+because the symmetric `#`-border padding lines made the rotation easy to miss at a glance. See the
+Seventh finding for the corrected, actual layout model.
+
+## Seventh finding: the "message" write is a column-major character grid, not a text paragraph
+
+Investigated further (per the user's prompt to re-read the driver sources and reason from the byte
+protocol) why multi-`\n` messages don't render as an ordinary top-to-bottom paragraph:
+
+- **`.message` (the field `writeMessageToDisplay` ultimately sends) is never actually set to a real
+  content string anywhere in `PANORAMA_P1.control.js`** — only initialized to `"x"`/`""` in the reset
+  functions and passed through as-is in `OutputState.prototype.send`. `pageTemplate` value `1` (the
+  constant this function always uses) is real and defined, but **Nektar's own P1 driver never
+  exercises this write path with actual content**. We are in genuinely uncharted territory relative to
+  the shipped driver, not replicating a known-used feature.
+- The two always-zero bytes in the write (`uint7ToHex(0)` twice, hardcoded in the driver's own
+  `writeMessageToDisplay`) are not a slot index or coordinate — they're fixed placeholders in the JS.
+  Whatever splits the payload into separate on-screen regions happens in the **device firmware**, not
+  as a parameter exposed by the driver.
+- Empirically (webcam-confirmed) determined the actual layout:
+  - A message with **no `\n`** renders as a single **vertical, rotated 90°** run of text, up to at
+    least **30 characters**, reading top-to-bottom in one column, with no visible truncation at 30
+    chars (`"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123"` rendered in full).
+  - Each **`\n`-delimited segment gets its own column**, placed side-by-side left-to-right across the
+    screen — confirmed with 8, 9, and 16 segments (`LINE-01`..`LINE-16`-style and `01`..`16`), all 16
+    fitting on screen at once without wrapping to a second tier. 30 identical single-char segments
+    (`"A\nA\n...\nA"`) did **not** all fit in one pass (visibly fewer columns rendered than 16-30) —
+    the exact upper bound on column count wasn't pinned down beyond "somewhere above 16, below 30",
+    and wasn't worth chasing further before moving on to actually using the grid.
+  - **Practical working canvas: at least 16 columns × ~30 rows** of individual character cells,
+    addressed by `\n` = "next column", ordinary characters = "next row down within the current
+    column". This is a real, usable 2D text grid — just **column-major**, not row-major.
+- **Consequence for ASCII art**: a normal row-major ASCII-art string (each line = one horizontal row of
+  the picture) will NOT render as a coherent image through this path — each line lands in its own
+  separate column instead of stacking. To draw a real 2D image, the source art must be **transposed**
+  first: each `\n`-delimited segment sent to the device must be one **column** of the target picture,
+  written top-to-bottom, with successive segments being successive columns left-to-right.
+- **Font size**: no evidence of a size/scale parameter anywhere in this write's byte layout — this
+  path appears to be a single fixed (small) font. A larger font, if one exists at all on this device,
+  would have to come from a different `DISPLAY_ID`/page-composition target (untested; the native
+  Faders page does show a visibly larger font for fader *values* than for labels, so bigger fonts likely
+  exist somewhere in the firmware, just not proven reachable from this specific write path yet).
+- **Freeform/pixel graphics, custom glyphs, and color**: no evidence found of a raw pixel/framebuffer
+  command anywhere in the driver source (the full command-byte space was already enumerated earlier —
+  `06`/`08`/`09`/`0B` only, see "Command-byte space enumerated" above) or in this write's structure — no
+  width/height/coordinate/color fields exist in the bytes we control. Sending non-ASCII byte values to
+  see if the font has extra custom glyphs (icons, block characters, etc.), and testing whether the
+  full page-composition path (as opposed to this message path) exposes a bigger font or per-field
+  color, are both still open and untested.
+
+### A tentative probe of the full page-composition path (pageTemplate 16+)
+
+Tried a minimal, hand-built full-page write (`composeStart`/`textEntry` shape, not the message
+shortcut): `06 10 01 01 06 <"HACPAD"> F7` (pageTemplate `0x10`=16, displayId `0x01`, one text entry).
+Result: the on-device UI's active tab switched from `Faders` to `Encoders` (still within the same
+native-style chrome — tabs, colors, layout all otherwise unchanged) and `"HACPAD"` appeared briefly in
+a small status-label area near a live CC readout. This is a real, contained effect (not damaging, no
+runaway state), but far short of a distinct "Bitwig Mixer page" with its own colors/widgets — more
+likely we just poked one field of whatever the firmware's Internal-mode UI already renders, since
+`06`'s payload has no field wide enough to select a whole alternate rendering (no color/coordinate
+bytes exist anywhere in the protocol we've read). **Working theory, not yet confirmed**: the rich
+visuals seen throughout this whole investigation (colored tabs, backgrounds, slider-widget graphics,
+larger fonts for values) are native firmware chrome tied to *which page/tab is active*, not something
+directly controllable via arbitrary SysEx byte fields — the DAW-facing protocol likely only ever fills
+in *text* within fields the firmware has already decided how to draw. Not conclusively settled; would
+need either a real Bitwig session capture or much more careful, systematic `displayId`/`pageTemplate`
+probing to confirm.
+
+## Eighth finding: LED on/off feedback confirmed working
+
+Per the official driver, LED state for illuminated buttons is set via plain **Control Change**
+messages (`sendChannelController`, a normal `0xBn` status byte) — no SysEx at all — sent on the **same
+CC number as that control's own input** (standard MIDI feedback convention). Extracted every
+`Z81134B25E3E8D3DA8(0, CC.<name>, ...)` (the driver's `sendChannelController` wrapper) call site from
+`PANORAMA_P1.control.js` to get the candidate list:
+
+```
+16-23   select/track buttons (indexed +0..7)
+106-110 menu buttons (indexed +0..4)
+84      transport Play
+80      transport Loop/Cycle
+85      transport Record
+29      arranger automation write
+99      sent unconditionally =127 during nektarinit's post-init task (static "connected" indicator)
+```
+(64-71 and 48-55, the param/pan encoder CCs, are also written back by the real driver, but to set an
+LED **ring position** (0-127), not a simple on/off — untried here.)
+
+Built `prototypes/panorama-p1/src/bin/led_test.rs`: sends all of the above CCs to value 127 (`on`) or 0
+(`off`) as plain Control Change messages on the default port, no SysEx involved. **Confirmed on real
+hardware**: the Loop and Play buttons lit **green**, and the Record button lit **red** (from their idle
+blue state), fully reversible back to blue with `off`. The select/track and menu button CCs showed no
+visible change in this test — either the P1 doesn't have physically wired LEDs for those specific
+buttons (plausible; some of this driver is shared across P1/P4/P6 which differ in physical controls),
+or they need a different value/channel nuance not yet tried.
 
 ## Debugging technique: USB webcam on the screen
 
