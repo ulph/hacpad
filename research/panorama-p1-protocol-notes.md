@@ -1202,6 +1202,36 @@ that includes physical-interaction as a signal (item 9 of the checklist) needs t
 capturing a `known-quiet` baseline immediately before deliberately touching a control, since ambient
 interaction can and does produce CC traffic and screen changes at any moment.
 
+### Twenty-first finding: item 4 (0x0B LED control) — one correction, one negative, one inconclusive
+
+Prompted directly: "for 4, we need the camera to see the whole controller!!" The earlier LED test (Ninth
+finding-era `led_test.rs` work) was framed tightly on just the screen; widened the physical camera
+position/angle so the full control surface — encoders, faders, the row of round buttons beneath them,
+and the transport section — is in frame, then re-ran all three untested LED angles from the checklist.
+
+**Correction: the select/track button LEDs (CC 16-23) DO work.** Previously reported as "no visible
+change" — that was simply because those 8 round buttons sit below the fader row, outside the old tight
+camera crop. With the wider framing, `led_test on` clearly lights all 8 with a ring around each button
+(reported by direct visual inspection as **red**, not the pink/magenta the photo's color cast suggested
+— consistent with the established camera-color-miscalibration pattern from the screen work). `led_test
+off` fully reverts them, confirmed reversible. Loop/Play (green) and Record (red) LEDs reconfirmed
+working as before, now also clearly visible in the wider frame.
+
+**Negative result: encoder ring-position CCs (64-71, 48-55) show no visible effect.** Sent CC 64 = 100
+(a `widget`-mode single-CC test) — no lighting change on any of the colored encoder knobs. Physically,
+these knobs show no visible LED-ring hardware at all (plain colored plastic caps) — consistent with the
+source comment that this driver is shared across P1/P4/P6, which differ in physical controls; this P1
+unit most likely lacks the LED rings those CCs are meant to drive on other models in the family.
+
+**Inconclusive: the 0x0B SysEx "Launcher" message.** Replayed the exact byte sequence extracted from
+source (`0B 00 0F 00 08 "Launcher" 00 01 02 0F 00`) against real hardware for the first time this
+session. Transmitted cleanly (no ALSA error, clean process exit) but produced **no observable effect**
+anywhere in the now-wide camera frame — screen, all LEDs, and button states all identical before and
+after. Since source ties `0x0B`'s call sites to `gBrowserOpen`/menu-focus state, it's plausible this
+message only does something when a specific precondition is met that a bare replay doesn't reproduce
+(e.g. the device believing it's mid-browser-navigation, a state we have no way to induce over MIDI
+alone) — left as a genuine open question, not resolved either way.
+
 ## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
