@@ -282,8 +282,9 @@ pub const LED_CCS: &[u8] = &[
     80, // transport Loop/Cycle
     84, // transport Play
     85, // transport Record
-    29, // arranger automation write
-    99, // "connected" indicator, sent unconditionally =127 at init -- also the F-Keys button's own LED
+    29, // arranger automation write -- CONFIRMED on hardware: toggling this produces no visible effect
+    99, // CONFIRMED on hardware: NOT the F-Keys button's own backlight -- lights the first of a row of
+        // 4 small status LEDs above the screen. The other 3 in that strip have no known CC yet.
 ];
 
 /// One CC message per entry in `LED_CCS`, each set to on (127) if that CC

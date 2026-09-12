@@ -1611,6 +1611,20 @@ re-entered and a specific on-screen F1-F11 slot pressed (not just the mode-entry
 produce a keystroke, or there's some other trigger condition not yet found. Standing follow-up, not
 resolved this session.
 
+### Thirtieth finding: two LED CCs tested live via the webcam-viewer's new LED panel
+
+Added an interactive LED panel to the webcam-viewer simulator (18 candidate on/off LED CCs from
+`led_test.rs`'s list, each a clickable dot sending plain CC 127/0). Live-toggled individually against
+real hardware:
+- **CC 29** ("arranger automation write", per source's `sendChannelController` call site): toggling on
+  produces **no visible effect** on this hardware -- either this unit has no backlit automation-write
+  button, or 29 isn't the right CC for it. Negative result, not yet explained.
+- **CC 99**: NOT the F-Keys button's own backlight as guessed in `led_test.rs`'s comment ("likely a
+  static connected/online indicator") -- confirmed instead to light the **first of a row of 4 small
+  status LEDs positioned above the screen**. Matches the "sent unconditionally at init" behavior (a
+  connection-status indicator), just not on the button it was assumed to be near. The other 3 LEDs in
+  that same strip have no known CC yet -- open follow-up.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical

@@ -201,7 +201,15 @@ impl Device {
 /// runs -- replaces the earlier Python-side STATE dict, which had no way to
 /// know about writes that didn't go through it (e.g. a CLI tool talking to
 /// the device directly). Every write from any client goes through here.
-type LastState = std::sync::Mutex<Option<String>>;
+///
+/// A JSON *object* that gets MERGED into (top-level keys only), not replaced
+/// wholesale by each incoming message -- the diffing client (index.html)
+/// deliberately sends one small message per changed field (each still
+/// carrying `layout`), so treating the raw text of "the last message" as
+/// the whole state (the original, buggy behavior here) meant a new client
+/// only ever saw whichever single field happened to be sent most recently,
+/// with every other field silently missing. Merging keeps all of them.
+type LastState = std::sync::Mutex<serde_json::Map<String, serde_json::Value>>;
 
 fn handle_client(stream: std::net::TcpStream, device: &std::sync::Mutex<Device>, last_state: &LastState) {
     let mut socket = match tungstenite::accept(stream) {
@@ -213,14 +221,17 @@ fn handle_client(stream: std::net::TcpStream, device: &std::sync::Mutex<Device>,
     };
     println!("client connected");
 
-    // Sync this new client up with whatever the last client (or this one,
-    // last time) actually set -- so opening a second tab doesn't start from
-    // stale defaults. (Real-time push to *already-connected* tabs when a
-    // different tab edits isn't done yet -- each connected socket only reads
-    // in this loop, there's no separate writer channel per client for that
-    // yet. A reasonable next step, not required for the sync-on-connect case.)
-    if let Some(existing) = last_state.lock().unwrap().clone() {
-        let _ = socket.send(Message::Text(existing.into()));
+    // Sync this new client up with the full merged state -- so opening a
+    // second tab doesn't start from stale/incomplete defaults. (Real-time
+    // push to *already-connected* tabs when a different tab edits isn't done
+    // yet -- each connected socket only reads in this loop, there's no
+    // separate writer channel per client for that yet. A reasonable next
+    // step, not required for the sync-on-connect case.)
+    {
+        let snapshot = serde_json::Value::Object(last_state.lock().unwrap().clone());
+        if let Ok(text) = serde_json::to_string(&snapshot) {
+            let _ = socket.send(Message::Text(text.into()));
+        }
     }
 
     loop {
@@ -247,7 +258,12 @@ fn handle_client(stream: std::net::TcpStream, device: &std::sync::Mutex<Device>,
                 continue;
             }
         }
-        *last_state.lock().unwrap() = Some(text.to_string());
+        if let Ok(serde_json::Value::Object(incoming)) = serde_json::from_str::<serde_json::Value>(&text) {
+            let mut state = last_state.lock().unwrap();
+            for (k, v) in incoming {
+                state.insert(k, v);
+            }
+        }
     }
     println!("client disconnected");
 }
@@ -266,10 +282,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Err(e) = device.apply(&initial) {
         eprintln!("warning: failed to apply default state to device: {e}");
     }
-    let initial_json = serde_json::to_string(&initial)?;
+    let initial_map = match serde_json::to_value(&initial)? {
+        serde_json::Value::Object(m) => m,
+        _ => unreachable!("ScreenUpdate always serializes to a JSON object"),
+    };
 
     let device = std::sync::Arc::new(std::sync::Mutex::new(device));
-    let last_state: std::sync::Arc<LastState> = std::sync::Arc::new(std::sync::Mutex::new(Some(initial_json)));
+    let last_state: std::sync::Arc<LastState> = std::sync::Arc::new(std::sync::Mutex::new(initial_map));
     println!("Connected. Listening on ws://0.0.0.0:{WS_PORT}");
 
     let listener = TcpListener::bind(("0.0.0.0", WS_PORT))?;
