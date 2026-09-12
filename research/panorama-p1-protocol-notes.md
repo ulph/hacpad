@@ -1,5 +1,14 @@
 # Nektar Panorama P1 — protocol notes
 
+> **Current status (read this first):** input (CC decoding) works and is done. Display **write bytes
+> are confirmed correct** against the official driver, sent on the correct ports, in three different
+> shapes, one-shot and repeated — **all with zero visible effect**. Every code-only hypothesis has been
+> tried and ruled out (see "Fourth finding" below for the full list). The single remaining, untried
+> lever is **physical**: check the P1's own `Setup` menu for a DAW/Bitwig mode selector and switch to
+> it. Nothing further should be attempted here on a bare "implement panorama p1 poc" prompt with no new
+> information — re-testing already-ruled-out hypotheses wastes a cycle. If woken with nothing new,
+> check the webcam frame for a change and hold if there isn't one.
+
 Device confirmed connected: `Nektar Technology / PANORAMA P1`, USB VID:PID `2467:2025` (`/sys/bus/usb/devices/1-1/`).
 
 Three sources feed this doc, in order of how much we've actually leaned on them: (1) a community
@@ -285,6 +294,12 @@ exactly, sent on the confirmed-correct ports, and still nothing happens.
   full init + message-write sequence with those connections held open throughout, re-photographed
   mid-hold. **No change** — same native standalone screen, and the device sent nothing back on either
   input port during the whole run. Ruled out.
+
+- **Repeating/refreshing the write doesn't help either.** Real Bitwig never sends a display write
+  once — `flush()` re-runs `OutputState.send()` continuously (every parameter tick, transport change,
+  100ms blink timer, etc.). Tested whether the device needs a refreshed write rather than a one-shot
+  message: resent the same message-write every 200ms for 8s (instead of once), held, photographed
+  mid-hold. **No change.** Ruled out.
 
 - **It isn't specific to the "quick message" shape either.** Added a `--raw <hex>` mode to
   `msg_test.rs` and replayed, verbatim, the community reimplementation's second full example message

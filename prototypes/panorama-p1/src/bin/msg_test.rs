@@ -136,10 +136,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         print!(" {b:02X}");
     }
     println!();
-    internal.send(&msg)?;
 
-    println!("Holding for 8s so we can photograph the screen...");
-    sleep(Duration::from_secs(8));
+    // Real Bitwig never sends a display write once -- flush() re-runs
+    // OutputState.send() continuously (every parameter tick, transport
+    // change, etc.), so the device may expect a refreshed/repeated write
+    // rather than a single one-shot message. Test that: resend every 200ms
+    // for the whole hold, instead of sending once and going quiet.
+    println!("Resending every 200ms for 8s so we can photograph the screen...");
+    for _ in 0..40 {
+        internal.send(&msg)?;
+        sleep(Duration::from_millis(200));
+    }
 
     println!("Sending exit sequence...");
     internal.send(&sysex(&EXIT_1))?;
