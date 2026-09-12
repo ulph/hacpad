@@ -104,6 +104,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         None
     };
 
+    // `msg_test --rawN "F0...F7" "F0...F7" ...` sends any number of raw SysEx
+    // messages back to back in one session -- generalizes --raw2 for probing
+    // several fields of one page template in a single hardware round-trip.
+    let raw_n: Option<Vec<Vec<u8>>> = if args.first().map(|s| s.as_str()) == Some("--rawN") {
+        Some(args[1..].iter().map(|s| parse_hex(s)).collect::<Result<_, _>>()?)
+    } else {
+        None
+    };
+
     let text = args.join(" ");
     let text = if text.is_empty() { "HACPAD".to_string() } else { text };
 
@@ -150,6 +159,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         sleep(Duration::from_millis(100));
         println!("Sending second message ({} bytes)...", second.len());
         default_conn.send(second)?;
+        println!("Holding for 8s so we can photograph the screen...");
+        sleep(Duration::from_secs(8));
+        println!("Sending exit sequence...");
+        default_conn.send(&sysex(&EXIT_1))?;
+        sleep(Duration::from_millis(50));
+        default_conn.send(&sysex(&EXIT_2))?;
+        return Ok(());
+    }
+
+    if let Some(messages) = &raw_n {
+        for (i, m) in messages.iter().enumerate() {
+            println!("Sending message {} of {} ({} bytes)...", i + 1, messages.len(), m.len());
+            default_conn.send(m)?;
+            sleep(Duration::from_millis(100));
+        }
         println!("Holding for 8s so we can photograph the screen...");
         sleep(Duration::from_secs(8));
         println!("Sending exit sequence...");

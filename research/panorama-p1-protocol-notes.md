@@ -685,6 +685,75 @@ regardless of which specific page is active. Not yet tested whether templates 17
 (ctrlElementName/Value, etc.) behave identically to 16's or differ in slot count/meaning — paused here
 for now, one template at a time as requested; templates 3/4/5 and 18-22 remain unexplored.
 
+## Eleventh finding: what we owe the Bitwig driver's exact approach, vs. what's its own choice
+
+A question worth answering explicitly before building hacpad's own equivalent: how closely must our
+own implementation mimic `PANORAMA_P1.control.js`'s specific approach?
+
+**Firmware-level contract — must match exactly, no freedom:**
+- The manufacturer prefix and command bytes (`06`/`08`/`09`/`0B`).
+- The port assignment (Instrument = default/port0, Internal = port1) and the init sequence — confirmed
+  required; nothing renders without it.
+- The page-template IDs (1, 2, 16-22...) and `displayId` numbers (1=titleBar, 6=name, 7=value...) —
+  firmware-defined enum values, not a Bitwig convention.
+- The message *shape* per template — template 1's fixed `00 00 <len> <text> 04` shape vs. the general
+  `<index><len><text>` compose shape are genuinely different firmware parsers (confirmed: sending the
+  wrong shape to template 1 got a NAK-like reply).
+- The ~127-byte single-message length ceiling (a firmware buffer limit).
+
+**The driver's own software choices — we owe none of this:**
+- *What text* goes in a field is arbitrary (confirmed repeatedly with made-up content).
+- *When* to send updates — the driver diffs against previously-sent state and only resends changed
+  fields on its own `flush()` cadence; there's no need to replicate any of that bookkeeping, we can just
+  send whenever we want.
+- *Where* field content comes from (Bitwig API observers, `BufferedElementArray` caching) is pure
+  JS-side plumbing, irrelevant to us — hacpad can source field content however it likes.
+- *Which* page to show and when is the driver's own UX design (see below) — not something we need to
+  copy.
+
+**Open/untested**: whether the firmware expects periodic traffic as a keepalive over a genuinely
+long-running session (only short bursts tested so far).
+
+### Where does page-navigation actually come from? (mostly not the DAW)
+
+Cataloged every `setActiveDisplayPage(...)` call site in the driver to see what actually triggers a
+page switch:
+- **Nearly all of them fire from inside the physical Control-Change/button handler** — switching to
+  Mixer / Instrument / Transport / Internal mode happens because the user pressed a specific physical
+  Mode button, handled entirely locally in the driver's own input-handling code. Bitwig is not
+  proactively pushing these changes.
+- **One genuine exception**: a Nektar-specific "Nektarine" plugin-browser page auto-switches based on
+  live Bitwig session state (`gNektarineInstance` changing) — real DAW-driven switching, but scoped to
+  that one special feature.
+- **The only other DAW-driven case**: the one-time default page on connect —
+  `host.scheduleTask(() => setActiveDisplayPage(Mixer), 500ms)` in `nektarinit()`.
+
+**Conclusion**: ordinary page navigation is a local, physical-button-driven concern, not something the
+DAW actively orchestrates moment to moment. hacpad doesn't need to replicate any "when should the page
+change" logic from Bitwig's side — we can just handle the same physical Mode-button CCs ourselves and
+send whichever pageTemplate SysEx we want in response, entirely our own design.
+
+## Twelfth finding: the "big font" readout is real, writable, and confirmed with our own text
+
+Every native screenshot this whole session has shown a noticeably larger-font single-line readout in
+the top-left corner (`MIDI CC 3`, updating live as physical controls are touched). Hypothesis: this is
+`displayId 2` (`currentParameterInfo`) from the traced pipeline (`Z810A716763F1A2A63` /
+`lastCurrentParameterInfo`) — normally driven by the firmware's own live-touch monitor in the absence
+of an explicit override, but a real writable field like any other.
+
+Tested: `06 10 02 <one entry, index 1, "HACPAD">`. **Confirmed, cleanly**: the big-font readout changed
+from `MIDI CC 3` to `HACPAD`, in the exact same large font and position. `displayId 3`
+(`currentParameterValue`, the paired big-font value readout) not yet tested.
+
+**Caveat on using this field for branding**: per the traced Ninth-finding pipeline, `displayId 2`'s
+real semantic role is "name of whatever was just touched/adjusted" (`Z810A716763F1A2A63`, set on
+interaction to things like `"Set Loop Start: "` or a track/clip name) — a contextual touch-feedback
+readout, not a permanent slot. It renders our arbitrary text fine right now only because nothing else
+is actively writing to it. If hacpad ever drives its own live touch-feedback through this same field,
+a static logo written here would get overwritten by the next interaction. The title bar (`displayId
+1`) is the better fit for anything meant to stay put; this one is better reserved for its intended
+live-feedback purpose, or used only transiently (e.g. a startup splash before real use begins).
+
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
 sent SysEx message actually changed the display, without needing the official software or a second
 reference implementation running. Practical notes from doing this:
