@@ -1544,6 +1544,82 @@ Next: a live, interactive full-controller mapping exercise -- physical interacti
 the webcam feed, cross-referenced against the listener's CC log in real time, to build out the complete
 physical-control-to-CC map (not just the handful found through source so far).
 
+### Twenty-ninth finding: a full live-mapping session -- most of the physical control surface, a methodology lesson, and a major new discovery (USB HID keyboard interface)
+
+A live, interactive session: a persistent background listener (`panorama-bridge`) decoding incoming
+CC in real time, a `Monitor` watching its log for each new distinct CC and auto-capturing a webcam
+photo the instant one appears (a small `tail -F | grep` filter, debounced to one event per 2s to avoid
+flooding), while physical controls were touched on camera one at a time. This mapped nearly the entire
+control surface in one pass: all 8 param encoders (64-71) and their 8 pan-encoder aliases (48-55 --
+same physical knobs, reporting under a different CC range after a mode/Shift switch, not a second row
+of controls as first suspected), all 8 faders (0-7; the "master" fader, CC 14, is confirmed
+electronically broken hardware on this unit and produces spurious jitter, not a real signal), all 8
+select/track buttons (16-23, cross-confirming the earlier LED-output test), the transport row, a
+five-button nav cluster (91-95), Shift (96) and Mode (103), the four/five "menu button" screen buttons
+(106-110), and the jog wheel (111, both as a relative rotary input and reused as the popup-menu
+highlight-index output).
+
+**Methodology lesson, the hard way**: a photo auto-captured "the instant a new CC is seen" during a
+*fast, sequential* run of presses is not reliable proof of which physical control produced it -- there
+is a small but real lag between a physical press and the log line/photo landing, and during rapid
+one-after-another presses this reliably attributes each photo to the *previous* button in the sequence,
+not the one that actually just fired. Caught this directly: photo-based reading of the transport row
+gave 81=loop/82=rewind/83=forward/84=stop/85=play, but reading the actual driver source (the full `CC`
+enum plus each case body's real Bitwig API call -- `transport.play()`, `.stop()`, `.record()`,
+`.rewind()`, `.fastForward()`, `.toggleLoop()`) gives the true mapping, shifted by exactly one position:
+**80=loop, 81=rewind, 82=forward, 83=stop, 84=play, 85=record**. The same lag affected the 86-90 and
+91-95 rows, originally guessed as "Track-/Track+/Patch-/Patch+/View" and generic "nav" buttons from
+photos -- source instead shows 86/87 are loop-in/loop-out point setters, 89 is the click/metronome
+toggle, and 91-95 are zoom/arrow-key/preset-scroll actions. **Lesson for any future one-shot photo
+attribution**: trust source over a fast-sequence photo when both are available; when only a photo is
+available, either slow down enough that the debounce window is a non-issue, or independently verify
+against source afterward as done here, don't trust a single frame.
+
+**A caveat surfaced mid-session**: this specific unit has been repainted white by its owner, so the
+original printed labels on most buttons are no longer visible/legible in photos -- position and
+function (screen changes, LED state, source cross-reference) had to substitute for reading text.
+
+**Major new discovery: pressing the "F-Keys" button (CC 99) opens a page the P1 renders entirely on its
+own**, showing a scrollable grid of slots (`F1`-`F11`, `P5`/`P11` labels visible). This is NOT something
+we (or any DAW driver) sent over SysEx -- our own tooling never writes to the display in response to CC
+input, and the source's own handler for this CC (`Z8104C81913F751BFA`) only does driver-side bookkeeping
+(`gBrowserOpen=false`, `setActiveDisplayPage(...)`, `nek_set_nektarine_instance_active(0)`) that has no
+effect at all when the actual Bitwig extension isn't running (as in our setup). The P1 firmware itself
+must be drawing this content locally and independently -- confirming, more concretely than the earlier
+"Internal mode" finding, that some of this device's UI is genuinely standalone. Confirmed momentary (the
+page closes when the button is released, not a toggle). Sending our own `pageTemplate=1` "hacpad"
+message write successfully overrode/dismissed it when needed (the strongest override available -- a
+literal template switch is not required, the message-mode write alone was enough here).
+
+**Even bigger discovery, prompted by asking what "F-Keys" could really mean**: enumerated the device's
+raw USB descriptors directly (`/sys/bus/usb/devices/1-1/`, no `lsusb` available in this sandbox) and
+found the P1 presents **three USB interfaces**, not one: `1-1:1.0` (Audio Control), `1-1:1.1` (MIDI
+Streaming -- the interface we've used all session), and **`1-1:1.2`, class 3 (HID)**. Reading its report
+descriptor (`/sys/class/hidraw/hidraw1/device/report_descriptor`) gives:
+```
+05 01 09 06 a1 01 05 07 19 e0 29 e7 15 00 25 01 75 01 95 08 81 02 95 01 75 08 81 01 19 00 29 65 15 00 25 65 95 06 75 08 81 00 c0
+```
+which decodes to a **completely standard USB Boot Keyboard descriptor** (Usage Page Generic Desktop /
+Usage Keyboard, an 8-bit modifier byte, a reserved byte, 6-byte rollover keycode array). **The Panorama
+P1 has a genuine, independent USB keyboard HID interface, entirely separate from MIDI and from anything
+the Bitwig driver does.** This is very plausibly the real mechanism behind "F-Keys" -- the on-screen page
+is likely just the P1's own UI for choosing which key each pad/slot sends via this channel, with actual
+keystrokes delivered over USB HID, bypassing MIDI/SysEx/the DAW driver entirely. **Not yet empirically
+confirmed**: a raw HID listener (`/dev/hidraw1`, world-readable, no permission issues) was armed but no
+report was captured during this session's testing -- either the F-Keys page needs to be actively
+re-entered and a specific on-screen F1-F11 slot pressed (not just the mode-entry button itself) to
+produce a keystroke, or there's some other trigger condition not yet found. Standing follow-up, not
+resolved this session.
+
+### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
+
+The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
+controls to CC numbers — raising the question of whether there's some bootstrap/handshake
+where the P1 tells a connected host (or is told) what each physical control is currently
+mapped to, rather than the CC map being a fixed, host-assumed constant as treated
+everywhere in this file so far. Not investigated this session (deliberately deferred) —
+noted here as a standing unknown, not a confirmed finding either way.
+
 ## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a

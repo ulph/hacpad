@@ -16,10 +16,10 @@
     border-radius: 4px; overflow: hidden; display: flex; flex-direction: column;
     font-family: monospace; box-shadow: 0 0 12px rgba(0,0,0,.6);
   }
-  #bigfont {
-    font-size: 15px; font-weight: bold; color: #fff; padding: 3px 6px;
-    background: #05070a; letter-spacing: 1px;
-  }
+  #bigfont-row { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 6px; background: #05070a; }
+  #bigfont { font-size: 15px; font-weight: bold; color: #fff; letter-spacing: 1px; }
+  #paramval { font-size: 12px; color: #9a9a9a; } /* displayId 3, paired with bigfont */
+  #pagelabels { font-size: 9px; color: #6a8; padding: 0 6px 2px; background: #05070a; min-height: 11px; } /* displayId 5 */
   #titlebar { display: flex; height: 20px; }
   #titlebar .seg {
     flex: 1; display: flex; align-items: center; justify-content: center;
@@ -51,6 +51,27 @@
   .pad-row-label { display: flex; align-items: center; justify-content: center; color: #9a9a9a; font-size: 10px; }
   .pad { background: #123047; border: 1px solid #2a4a68; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; }
   .pad.empty { background: #0d1b28; }
+  .pad.lit { background: #7a1f2b; border-color: #c0392b; } /* displayId 0 (pad_state) != 0 -- confirmed red/pink tint, Twenty-fifth finding */
+
+  /* displayId 8 popup menu -- ALWAYS overlays on top of whatever's showing, real device renders it as
+     a box on the right side of the screen (Twenty-sixth/Twenty-seventh findings) */
+  #popup-menu {
+    position: absolute; top: 22px; right: 4px; bottom: 22px; width: 44%;
+    background: rgba(5,10,20,.94); border: 1px solid #345; display: flex; flex-direction: column;
+    font-size: 9px; overflow: hidden;
+  }
+  #popup-menu .item { padding: 2px 4px; color: #fff; border-bottom: 1px solid #1a2a38; }
+  #popup-menu .item.hl { background: #c0392b; } /* CC 111 = selectedMenuItem */
+  #screen { position: relative; }
+
+  /* pageTemplate=1 "message" overlay (writeMessageToDisplay) -- a separate, special rendering
+     pathway, not composable with the other templates/chrome (see protocol notes) -- so on the mockup
+     it's drawn as a full-screen takeover, same as it visually is on real hardware. */
+  #message-overlay {
+    position: absolute; inset: 0; background: #05070a; color: #fff; font-weight: bold;
+    font-size: 16px; letter-spacing: 1px; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 10px; box-sizing: border-box; white-space: pre-wrap;
+  }
 
   /* list layout */
   .list-layout { display: flex; height: 100%; gap: 8px; }
@@ -74,6 +95,11 @@
   .row { display: flex; gap: 6px; }
   .row > div { flex: 1; }
   #note { font-size: 11px; color: #888; margin-top: 10px; max-width: 480px; }
+
+  #led-panel { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .led-item { display: flex; flex-direction: column; align-items: center; font-size: 9px; color: #aaa; width: 36px; }
+  .led-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #555; background: #222; cursor: pointer; padding: 0; }
+  .led-dot.on { background: #e0a030; border-color: #ffc060; box-shadow: 0 0 6px #e0a030; } /* color unconfirmed on hardware -- on/off only is confirmed, hue is a placeholder */
 </style>
 </head>
 <body>
@@ -82,81 +108,141 @@
 <div id="simulator">
   <div id="screen-wrap">
     <div id="screen">
-      <div id="bigfont">MIDI CC 3</div>
+      <div id="bigfont-row">
+        <div id="bigfont"></div>
+        <div id="paramval"></div>
+      </div>
+      <div id="pagelabels"></div>
       <div id="titlebar"></div>
       <div id="content"></div>
       <div id="tabs"></div>
+      <div id="popup-menu" hidden></div>
+      <div id="message-overlay" hidden></div>
     </div>
   </div>
 
   <div id="controls">
     <h3>Panorama P1 screen simulator</h3>
-    <fieldset>
-      <label>Big-font readout (displayId 2)</label>
-      <input type="text" id="in-bigfont" value="MIDI CC 3" maxlength="30">
-    </fieldset>
+    <div id="note">Full field docs: research/panorama-p1-protocol-notes.md, protocol.json</div>
 
     <fieldset>
-      <label>Title bar, 3 segments (displayId 1)</label>
-      <div class="row">
-        <div><input type="text" id="in-tb1" value="Nektar" maxlength="12"></div>
-        <div><input type="text" id="in-tb2" value="Panorama P1" maxlength="12"></div>
-        <div><input type="text" id="in-tb3" value="1-NEKTAR 1" maxlength="12"></div>
-      </div>
-    </fieldset>
-
-    <fieldset>
-      <label>Page template (only controls WHICH WIDGET renders the fields below -- not
-        which fields exist or hold what; displayId addressing is confirmed
-        template-independent, see the protocol notes)</label>
+      <label>page_template</label>
       <select id="in-layout">
-        <option value="knobs">Knobs, 4x2 (templates 16/17)</option>
-        <option value="faders-split">Faders, split 4+4, 16 stacked labels (template 18)</option>
-        <option value="faders-row">Faders, one row of 8 (templates 19/20)</option>
-        <option value="pads16">Pad grid, 4x4, 16 pads (template 21)</option>
-        <option value="pads12">Pad grid, 3x4, 12 pads (template 22 -- confirmed distinct from 21, Sixteenth finding)</option>
-        <option value="list">Fader + list (template 4)</option>
-        <option value="grid5">Plain 2x4 grid, no widgets (template 5)</option>
+        <option value="knobs">16/17 mixer</option>
+        <option value="faders-split">18 instrument_layer_container</option>
+        <option value="faders-row">19/20 faders_row</option>
+        <option value="pads16">21 drum_pads</option>
+        <option value="pads12">22 drum_pads_3row</option>
+        <option value="list">4 list</option>
+        <option value="grid5">5 grid5</option>
+        <option value="message">1 message</option>
+        <option value="menu">2 menu</option>
+        <option value="transport-launcher">3 transport_launcher</option>
+        <option value="list-highlighted">6 list_highlighted</option>
+        <option value="scene-buttons">7 scene_buttons</option>
+        <option value="browser-list">8/9 browser_list</option>
+        <option value="reset">0 reset</option>
       </select>
     </fieldset>
 
     <fieldset>
-      <label>Names (displayId 6, comma-separated -- slot count depends on the widget above:
-        8 for knobs/faders-row/grid5, 16 for faders-split and pads16, 12 for pads12, 5 for list)</label>
-      <input type="text" id="in-names" value="CUT,RES,ATK,DEC,SUS,REL,DRV,MIX">
-      <label>Values (displayId 7, up to 8, comma-separated -- knobs only)</label>
-      <input type="text" id="in-values" value="1.2k,45%,12ms,80ms,0dB,200ms,30%,wet">
+      <label>message (pageTemplate 1)</label>
+      <input type="text" id="in-message-overlay" value="" maxlength="127">
     </fieldset>
 
     <fieldset>
-      <label>Bottom tabs (5, comma-separated) + active index (0-4)</label>
+      <label>displayId 2 -- big_font</label>
+      <input type="text" id="in-bigfont" value="" maxlength="30">
+      <label>displayId 3 -- current_value</label>
+      <input type="text" id="in-current-value" value="" maxlength="16">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 1 -- title_bar</label>
       <div class="row">
-        <div style="flex:3"><input type="text" id="in-tabs" value="Faders,Encoders,Cntrl Edit,Global,Setup"></div>
+        <div><input type="text" id="in-tb1" value="" maxlength="12"></div>
+        <div><input type="text" id="in-tb2" value="" maxlength="12"></div>
+        <div><input type="text" id="in-tb3" value="" maxlength="12"></div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 5 -- page_labels</label>
+      <input type="text" id="in-pagelabels" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 6 -- ctrl_element_name</label>
+      <input type="text" id="in-names" value="">
+      <label>displayId 7 -- ctrl_element_value</label>
+      <input type="text" id="in-values" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 0 -- pad_state</label>
+      <input type="text" id="in-padstate" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 4 -- menu_button</label>
+      <div class="row">
+        <div style="flex:3"><input type="text" id="in-tabs" value=""></div>
         <div style="flex:1"><input type="text" id="in-tabs-active" value="0"></div>
       </div>
     </fieldset>
 
+    <fieldset>
+      <label>displayId 8 -- page_menu</label>
+      <input type="text" id="in-menuitems" value="">
+      <label>CC 111 -- selectedMenuItem</label>
+      <input type="text" id="in-menuhighlight" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>LEDs (CC, on/off)</label>
+      <div id="led-panel"></div>
+    </fieldset>
+
     <div id="push-status" style="font-size:11px; color:#888; margin-bottom:6px;">not yet pushed</div>
     <button id="full-sync-btn" type="button" style="margin-bottom:10px;">Send full state (bypass diff)</button>
-
-    <div id="note">
-      Editing any field above updates this mockup instantly AND pushes ONLY that field's write to the
-      real Panorama P1 (debounced ~350ms), if one is connected -- see the status line above. Changing
-      the template dropdown alone pushes just the template switch (carried on a title-bar write, since
-      that field survives the switch); it does not resend names/values/tabs/bigfont, since a real
-      switch clears those on the device anyway (see "Thirteenth finding" in the protocol notes) --
-      editing them again after a switch sends them fresh. The real screen is a 4-color display (black,
-      white, red highlight, grey secondary text) -- proportions and the grey tone here are still
-      approximations from photographed test results (research/panorama-p1-protocol-notes.md), not
-      pixel-exact, and the webcam's shooting angle can make the grey read as blue or black in photos;
-      the real device is the ground truth.
-    </div>
   </div>
 </div>
 
 <script>
 function el(id) { return document.getElementById(id); }
 function csv(s) { return s.split(',').map(x => x.trim()); }
+
+// See lib.rs's LED_CCS -- kept in sync by hand, same 18 CCs, same order.
+const LED_DEFS = [
+  [16, 'Sel1'], [17, 'Sel2'], [18, 'Sel3'], [19, 'Sel4'], [20, 'Sel5'], [21, 'Sel6'], [22, 'Sel7'], [23, 'Sel8'],
+  [106, 'Menu1'], [107, 'Menu2'], [108, 'Menu3'], [109, 'Menu4'], [110, 'Menu5'],
+  [80, 'Loop'], [84, 'Play'], [85, 'Record'], [29, 'AutoWr'], [99, 'FKeys'],
+];
+
+function buildLedPanel() {
+  const panel = el('led-panel');
+  panel.innerHTML = '';
+  LED_DEFS.forEach(([cc, label]) => {
+    const item = document.createElement('div');
+    item.className = 'led-item';
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'led-dot';
+    dot.dataset.cc = cc;
+    dot.title = `CC ${cc}`;
+    dot.addEventListener('click', () => { dot.classList.toggle('on'); pushToDevice(); });
+    const lbl = document.createElement('div');
+    lbl.textContent = label;
+    item.appendChild(dot);
+    item.appendChild(lbl);
+    panel.appendChild(item);
+  });
+}
+buildLedPanel();
+
+function ledsOnList() {
+  return [...document.querySelectorAll('.led-dot.on')].map(d => parseInt(d.dataset.cc, 10));
+}
 
 function renderTitleBar() {
   const segs = [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value];
@@ -190,10 +276,17 @@ function fader(name, pct) {
   return w;
 }
 
+function padStateList() {
+  const raw = el('in-padstate').value.trim();
+  if (!raw) return [];
+  return raw.split(',').map(x => parseInt(x.trim(), 10) || 0);
+}
+
 function renderContent() {
   const layout = el('in-layout').value;
   const names = csv(el('in-names').value);
   const values = csv(el('in-values').value);
+  const padState = padStateList();
   const content = el('content');
   content.innerHTML = '';
 
@@ -248,7 +341,8 @@ function renderContent() {
         const idx = (nrows - 1 - r) * 4 + c; // row A = indices 0-3, row B = 4-7, etc.
         const pad = document.createElement('div');
         const label = names[idx];
-        pad.className = 'pad' + (label ? '' : ' empty');
+        const lit = (padState[idx] || 0) !== 0; // displayId 0 -- confirmed red/pink tint, Twenty-fifth finding
+        pad.className = 'pad' + (label ? '' : ' empty') + (lit ? ' lit' : '');
         pad.textContent = label || '';
         grid.appendChild(pad);
       }
@@ -280,14 +374,51 @@ function renderContent() {
       grid.appendChild(pad);
     }
     content.appendChild(grid);
+  } else {
+    // No bespoke mock widget built yet for this template (message/menu/
+    // transport-launcher/list-highlighted/scene-buttons/browser-list) --
+    // fall back to a plain field dump rather than pretending to know the
+    // real layout. The actual SysEx write over the WebSocket is unaffected;
+    // this only concerns the on-screen mockup.
+    const dump = document.createElement('div');
+    dump.style.cssText = 'font-size:10px; color:#9a9a9a; line-height:1.5;';
+    dump.innerHTML = `<div style="color:#666;">(no mock widget for this template yet -- names/values shown raw)</div>` +
+      `names: ${names.filter(Boolean).join(', ') || '(none)'}<br>values: ${values.filter(Boolean).join(', ') || '(none)'}`;
+    content.appendChild(dump);
   }
+}
+
+function renderPopupMenu() {
+  const items = csv(el('in-menuitems').value).filter(Boolean);
+  const box = el('popup-menu');
+  if (items.length === 0) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const hl = parseInt(el('in-menuhighlight').value, 10) || 0; // 1-based, CC 111
+  box.innerHTML = '';
+  items.slice(0, 8).forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'item' + (i + 1 === hl ? ' hl' : '');
+    row.textContent = s;
+    box.appendChild(row);
+  });
 }
 
 function renderSimulator() {
   el('bigfont').textContent = el('in-bigfont').value;
+  el('paramval').textContent = el('in-current-value').value; // displayId 3
+  el('pagelabels').textContent = csv(el('in-pagelabels').value).filter(Boolean).join('  |  '); // displayId 5
   renderTitleBar();
   renderContent();
   renderTabs();
+  renderPopupMenu(); // displayId 8 -- ALWAYS an overlay, drawn last, independent of layout/template
+
+  // pageTemplate=1 message overlay -- a separate rendering pathway on real
+  // hardware, so it takes over the whole mock screen the same way, hiding
+  // everything else drawn above rather than compositing with it.
+  const msg = el('in-message-overlay').value;
+  const overlay = el('message-overlay');
+  overlay.hidden = !msg;
+  overlay.textContent = msg;
 }
 
 // Bidirectional, but NOT via this page's own HTTP server: the browser talks
@@ -338,7 +469,11 @@ connectService();
 // to resend unconditionally) and nothing else, and our bookkeeping for the
 // content fields is invalidated (not resent) so the *next* edit to any of
 // them is treated as a real change instead of being skipped as "unchanged".
-let lastSent = { layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null };
+let lastSent = {
+  layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null,
+  currentValue: null, pageLabels: null, padState: null, menuItems: null, menuHighlight: null,
+  message: null, ledsOn: null,
+};
 
 function arraysEqual(a, b) {
   if (!a || !b) return a === b;
@@ -354,6 +489,15 @@ function currentState() {
     names: csv(el('in-names').value),
     values: csv(el('in-values').value),
     tabs: csv(el('in-tabs').value),
+    // Added so every displayId is independently addressable, orthogonal to
+    // `layout` -- see the note fieldset in the controls panel.
+    currentValue: el('in-current-value').value,
+    pageLabels: csv(el('in-pagelabels').value),
+    padState: padStateList(),
+    menuItems: csv(el('in-menuitems').value).filter(Boolean),
+    menuHighlight: parseInt(el('in-menuhighlight').value, 10) || 0,
+    message: el('in-message-overlay').value,
+    ledsOn: ledsOnList(),
   };
 }
 
@@ -373,7 +517,11 @@ function pushToDevice() {
 
     if (layoutChanged) {
       sendField(cur.layout, { titleBar: cur.titleBar });
-      lastSent = { layout: cur.layout, titleBar: cur.titleBar, bigfont: null, names: null, values: null, tabs: null };
+      lastSent = {
+        layout: cur.layout, titleBar: cur.titleBar, bigfont: null, names: null, values: null, tabs: null,
+        currentValue: null, pageLabels: null, padState: null, menuItems: lastSent.menuItems, menuHighlight: lastSent.menuHighlight,
+        message: lastSent.message, ledsOn: lastSent.ledsOn,
+      };
       return;
     }
     if (!layoutKnown) lastSent.layout = cur.layout; // first push ever: adopt silently, no switch to carry
@@ -397,6 +545,42 @@ function pushToDevice() {
     if (!arraysEqual(cur.tabs, lastSent.tabs)) {
       sendField(cur.layout, { tabs: cur.tabs });
       lastSent.tabs = cur.tabs;
+    }
+    if (cur.currentValue !== lastSent.currentValue) {
+      sendField(cur.layout, { currentValue: cur.currentValue });
+      lastSent.currentValue = cur.currentValue;
+    }
+    if (!arraysEqual(cur.pageLabels, lastSent.pageLabels)) {
+      sendField(cur.layout, { pageLabels: cur.pageLabels });
+      lastSent.pageLabels = cur.pageLabels;
+    }
+    if (!arraysEqual(cur.padState, lastSent.padState)) {
+      sendField(cur.layout, { padState: cur.padState });
+      lastSent.padState = cur.padState;
+    }
+    // Popup menu (displayId 8) and its CC-111 highlight always target
+    // page_template=0 on the real device regardless of `cur.layout` -- sent
+    // the same way (via sendField) since the service ignores `layout` for
+    // these two fields anyway (see service.rs's apply()).
+    if (!arraysEqual(cur.menuItems, lastSent.menuItems)) {
+      sendField(cur.layout, { menuItems: cur.menuItems });
+      lastSent.menuItems = cur.menuItems;
+    }
+    if (cur.menuHighlight !== lastSent.menuHighlight) {
+      sendField(cur.layout, { menuHighlight: cur.menuHighlight });
+      lastSent.menuHighlight = cur.menuHighlight;
+    }
+    // The message overlay (pageTemplate=1) is its own rendering pathway,
+    // independent of `cur.layout` too -- write_message() on the service side
+    // hardcodes its own page_template, same as the popup menu does.
+    if (cur.message !== lastSent.message) {
+      sendField(cur.layout, { message: cur.message });
+      lastSent.message = cur.message;
+    }
+    // LEDs are plain CC feedback, unrelated to page_template entirely.
+    if (!arraysEqual(cur.ledsOn, lastSent.ledsOn)) {
+      sendField(cur.layout, { ledsOn: cur.ledsOn });
+      lastSent.ledsOn = cur.ledsOn;
     }
   }, 350);
 }
@@ -445,6 +629,17 @@ function applyScreenPush(push) {
   if (push.names) el('in-names').value = push.names.join(',');
   if (push.values) el('in-values').value = push.values.join(',');
   if (push.tabs) el('in-tabs').value = push.tabs.join(',');
+  if (push.currentValue !== undefined) el('in-current-value').value = push.currentValue;
+  if (push.pageLabels) el('in-pagelabels').value = push.pageLabels.join(',');
+  if (push.padState) el('in-padstate').value = push.padState.join(',');
+  if (push.menuItems) el('in-menuitems').value = push.menuItems.join(',');
+  if (push.menuHighlight !== undefined) el('in-menuhighlight').value = push.menuHighlight;
+  if (push.message !== undefined) el('in-message-overlay').value = push.message;
+  if (push.ledsOn) {
+    document.querySelectorAll('.led-dot').forEach(d => {
+      d.classList.toggle('on', push.ledsOn.includes(parseInt(d.dataset.cc, 10)));
+    });
+  }
   renderSimulator();
 
   // This push is itself a record of what's actually on the device (from this
@@ -457,6 +652,13 @@ function applyScreenPush(push) {
   if (push.names) lastSent.names = push.names;
   if (push.values) lastSent.values = push.values;
   if (push.tabs) lastSent.tabs = push.tabs;
+  if (push.currentValue !== undefined) lastSent.currentValue = push.currentValue;
+  if (push.pageLabels) lastSent.pageLabels = push.pageLabels;
+  if (push.padState) lastSent.padState = push.padState;
+  if (push.menuItems) lastSent.menuItems = push.menuItems;
+  if (push.menuHighlight !== undefined) lastSent.menuHighlight = push.menuHighlight;
+  if (push.message !== undefined) lastSent.message = push.message;
+  if (push.ledsOn) lastSent.ledsOn = push.ledsOn;
 }
 
 // Purely hot-reload now (mtime check) -- state sync is the WebSocket's job

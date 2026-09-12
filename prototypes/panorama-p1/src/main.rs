@@ -57,19 +57,46 @@ fn cc_name(cc: u8) -> String {
         16..=23 => format!("select_{}", cc - 16 + 1),
         48..=55 => format!("pan_encoder_{}", cc - 48 + 1),
         64..=71 => format!("param_encoder_{}", cc - 64 + 1),
-        81..=85 => {
-            // unverified order
-            ["play", "stop", "record", "rewind", "forward"][(cc - 81) as usize].to_string()
-        }
-        91..=95 => format!("nav_{}", cc - 91 + 1), // unverified mapping
+        // Transport row and friends -- CORRECTED AGAIN (Twenty-ninth finding): the first pass at
+        // this (photo-of-finger-position based) turned out to have a one-step lag between the
+        // physical press and the log line/photo landing during rapid sequential presses -- the
+        // webcam attribution below was consistently off by one position. Re-derived from the
+        // actual PANORAMA_P1.control.js CC enum + each case body's real Bitwig API call
+        // (transport.play(), .stop(), .record(), .rewind(), .fastForward(), .toggleLoop()), which
+        // is authoritative and not subject to that lag at all. Trust this over any earlier photo-
+        // based guess for these six.
+        80 => "loop".to_string(),    // transport.toggleLoop()
+        81 => "rewind".to_string(),  // transport.rewind()
+        82 => "forward".to_string(), // transport.fastForward()
+        83 => "stop".to_string(),    // transport.stop() / transport.setPosition(0)
+        84 => "play".to_string(),    // transport.play()
+        85 => "record".to_string(),  // transport.record()
+        86 => "loop_in".to_string(), // transport.getInPosition().set(...)
+        87 => "loop_out".to_string(), // transport.getOutPosition().set(...)
+        // 88, 90: not resolved from source in this pass (case bodies not matched by a simple
+        // grep -- may span more of the minified line than searched). 91-95 confirmed to exist as a
+        // 5-button nav cluster, tied to zoom/arrow-key/preset-scroll actions (94 confirmed:
+        // application.zoomIn() / arrowKeyDown() / preset-scroll depending on Shift and browser
+        // state) -- exact per-button identity (which is "up" vs "zoom" etc) not individually
+        // distinguished yet. 89 confirmed: transport.toggleClick()/toggleMetronomeTicks() --
+        // labeled "click" below, correcting the earlier photo-based "patch_plus" guess.
+        89 => "click".to_string(),
+        91..=95 => format!("nav_zoom_{}", cc - 91 + 1),
+        99 => "f_keys".to_string(), // confirmed live: opens a distinct, DEVICE-NATIVE "F-KEYS" page (F1-F11/P5/P11 grid) -- rendered by the P1 itself, not by anything we (or a DAW driver) send over SysEx; source's handler just does setActiveDisplayPage/gBrowserOpen bookkeeping on the Bitwig-driver side, which isn't even running in our setup. Confirmed momentary (releases when the button is released). The P1 also exposes a genuine USB HID keyboard interface (class 3, standard boot-keyboard report descriptor, separate from MIDI) -- plausibly what "F-Keys" actually drives, but no HID report was captured yet to confirm the link empirically.
+        100 => "rewind_bar".to_string(), // positional guess only, not source- or photo-confirmed with confidence
+        101 => "forward_bar".to_string(), // positional guess only
+        102 => "undo".to_string(),        // positional guess only
         // Confirmed from PANORAMA_P1.control.js's onMidi CC dispatch (Z811481AF53E7994F1),
         // then verified live via the physical device (Twenty-eighth finding):
         96 => "shift".to_string(), // momentary; source sets a boolean gate flag on value>0/0
+        97 => "jog_click".to_string(), // fires right alongside the jog wheel's own cc (111) -- likely its push/click function
         103 => "mode".to_string(), // source: setActiveDisplayPage(internalPage) on press
+        106 => "menu_button_0".to_string(), // 5th of the "menu buttons" LED range (106-110); not otherwise distinguished from 107-110
         107 => "screen_button_1".to_string(),
         108 => "screen_button_2".to_string(),
         109 => "screen_button_3_exit".to_string(), // confirmed live: closes the popup menu (onMenuCancel) when one is open
         110 => "menu_enter".to_string(), // confirmed live: onMenuEnter when a popup menu is open
+        111 => "jog_wheel".to_string(), // confirmed live: relative encoder ticks; also reused as the popup-menu highlight-index CC in the output direction (Twenty-seventh finding)
         _ => format!("cc_{cc}"),
     }
 }
@@ -77,8 +104,8 @@ fn cc_name(cc: u8) -> String {
 fn cc_kind(cc: u8) -> CcKind {
     match cc {
         0..=7 | 14 => CcKind::Fader,
-        48..=55 | 64..=71 => CcKind::Encoder,
-        16..=23 | 81..=85 | 91..=95 | 96 | 103 | 107..=110 => CcKind::Button,
+        48..=55 | 64..=71 | 111 => CcKind::Encoder,
+        16..=23 | 80..=90 | 91..=103 | 106..=110 => CcKind::Button,
         _ => CcKind::Unknown,
     }
 }
