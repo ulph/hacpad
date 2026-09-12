@@ -26,7 +26,7 @@
     font-size: 11px; font-weight: bold; color: #fff; overflow: hidden; white-space: nowrap;
   }
   #titlebar .seg.on { background: #c0392b; }
-  #titlebar .seg.off { background: #2c3e50; }
+  #titlebar .seg.off { background: #333; }
   #content { flex: 1; padding: 6px; overflow: hidden; }
 
   /* knob layout */
@@ -34,7 +34,7 @@
   .knob { text-align: center; font-size: 9px; }
   .knob .dial { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #ccc 60%, #999); margin: 0 auto 3px; position: relative; }
   .knob .dial::after { content: ''; position: absolute; top: 3px; left: 50%; width: 2px; height: 8px; background: #333; transform: translateX(-50%) rotate(20deg); transform-origin: bottom; }
-  .knob .val { color: #7fd0ff; }
+  .knob .val { color: #9a9a9a; }
   .knob .name { color: #fff; }
 
   /* fader layout */
@@ -48,7 +48,7 @@
 
   /* pad grid layout */
   .pad-grid { display: grid; grid-template-columns: 16px repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 3px; height: 100%; }
-  .pad-row-label { display: flex; align-items: center; justify-content: center; color: #7fd0ff; font-size: 10px; }
+  .pad-row-label { display: flex; align-items: center; justify-content: center; color: #9a9a9a; font-size: 10px; }
   .pad { background: #123047; border: 1px solid #2a4a68; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; }
   .pad.empty { background: #0d1b28; }
 
@@ -57,12 +57,12 @@
   .list-layout .fader { flex: 0 0 20px; }
   .list-items { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
   .list-item { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #fff; }
-  .list-item .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid #7fd0ff; }
+  .list-item .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid #9a9a9a; }
 
   #tabs { display: flex; height: 22px; }
   #tabs .tab { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: #fff; }
   #tabs .tab.on { background: #c0392b; }
-  #tabs .tab.off { background: #2471a3; }
+  #tabs .tab.off { background: #333; }
 
   /* --- controls ----------------------------------------------------- */
   #controls { flex: 1; min-width: 280px; max-width: 480px; }
@@ -115,7 +115,7 @@
         <option value="list">Fader + list (template 4)</option>
         <option value="grid5">Plain 2x4 grid, no widgets (template 5)</option>
       </select>
-      <label>Names (displayId 6, up to 8, comma-separated)</label>
+      <label>Names (displayId 6, up to 8 -- 16 for faders-split, comma-separated)</label>
       <input type="text" id="in-names" value="CUT,RES,ATK,DEC,SUS,REL,DRV,MIX">
       <label>Values (displayId 7, up to 8, comma-separated -- knobs only)</label>
       <input type="text" id="in-values" value="1.2k,45%,12ms,80ms,0dB,200ms,30%,wet">
@@ -130,12 +130,19 @@
     </fieldset>
 
     <div id="push-status" style="font-size:11px; color:#888; margin-bottom:6px;">not yet pushed</div>
+    <button id="full-sync-btn" type="button" style="margin-bottom:10px;">Send full state (bypass diff)</button>
 
     <div id="note">
-      Editing any field above updates this mockup instantly AND pushes the same write to the real
-      Panorama P1 (debounced ~350ms), if one is connected -- see the status line above. Colors and
-      proportions here are still approximations from photographed test results
-      (research/panorama-p1-protocol-notes.md), not pixel-exact; the real device is the ground truth.
+      Editing any field above updates this mockup instantly AND pushes ONLY that field's write to the
+      real Panorama P1 (debounced ~350ms), if one is connected -- see the status line above. Changing
+      the template dropdown alone pushes just the template switch (carried on a title-bar write, since
+      that field survives the switch); it does not resend names/values/tabs/bigfont, since a real
+      switch clears those on the device anyway (see "Thirteenth finding" in the protocol notes) --
+      editing them again after a switch sends them fresh. The real screen is a 4-color display (black,
+      white, red highlight, grey secondary text) -- proportions and the grey tone here are still
+      approximations from photographed test results (research/panorama-p1-protocol-notes.md), not
+      pixel-exact, and the webcam's shooting angle can make the grey read as blue or black in photos;
+      the real device is the ground truth.
     </div>
   </div>
 </div>
@@ -193,18 +200,26 @@ function renderContent() {
       grid.appendChild(k);
     }
     content.appendChild(grid);
-  } else if (layout === 'faders-split' || layout === 'faders-row') {
+  } else if (layout === 'faders-split') {
+    // Template 18 confirmed to use all 16 ctrlElementName slots, not 8: each of
+    // the 8 fader bars shows TWO stacked labels. Left group of 4 stacks
+    // names[0-3] (top) over names[4-7] (bottom); right group of 4 stacks
+    // names[8-11] (top) over names[12-15] (bottom) -- see "Follow-up on
+    // template 18: it actually has 16 name slots, not 8" in the protocol notes.
     const row = document.createElement('div');
-    row.className = 'fader-row' + (layout === 'faders-split' ? ' split' : '');
-    if (layout === 'faders-split') {
-      const g1 = document.createElement('div'); g1.className = 'fader-group';
-      const g2 = document.createElement('div'); g2.className = 'fader-group';
-      for (let i = 0; i < 4; i++) g1.appendChild(fader(names[i] || '', 40 + i * 8));
-      for (let i = 4; i < 8; i++) g2.appendChild(fader(names[i] || '', 40 + (i - 4) * 8));
-      row.appendChild(g1); row.appendChild(g2);
-    } else {
-      for (let i = 0; i < 8; i++) row.appendChild(fader(names[i] || '', 40 + (i % 4) * 8));
-    }
+    row.className = 'fader-row split';
+    const g1 = document.createElement('div'); g1.className = 'fader-group';
+    const g2 = document.createElement('div'); g2.className = 'fader-group';
+    for (let i = 0; i < 4; i++) g1.appendChild(fader(`${names[i] || ''}/${names[i + 4] || ''}`, 40 + i * 8));
+    for (let i = 0; i < 4; i++) g2.appendChild(fader(`${names[i + 8] || ''}/${names[i + 12] || ''}`, 40 + i * 8));
+    row.appendChild(g1); row.appendChild(g2);
+    content.appendChild(row);
+  } else if (layout === 'faders-row') {
+    // Templates 19/20: one continuous row of 8, single label per fader (16-slot
+    // stacking was never confirmed here -- that's specific to template 18).
+    const row = document.createElement('div');
+    row.className = 'fader-row';
+    for (let i = 0; i < 8; i++) row.appendChild(fader(names[i] || '', 40 + (i % 4) * 8));
     content.appendChild(row);
   } else if (layout === 'pads') {
     const grid = document.createElement('div');
@@ -261,33 +276,113 @@ function renderSimulator() {
   renderTabs();
 }
 
-// Bidirectional: every edit also pushes to the real device (debounced, so a
-// fast typist doesn't flood it with a SysEx write per keystroke). Requires
-// the P1 to actually be connected -- server.py logs a "no live push"
-// message at startup if it isn't, and /update_screen just returns an error,
-// shown here rather than failing silently.
+// Bidirectional, but NOT via this page's own HTTP server: the browser talks
+// directly to prototypes/panorama-p1/src/bin/service.rs, the one persistent
+// process that actually holds the connection to the device (see that file's
+// doc comment). This server (server.py) has no involvement in this at all --
+// it only serves the webcam feed and this static page. Every edit pushes
+// over the same open WebSocket (debounced, so a fast typist doesn't flood
+// it with a SysEx write per keystroke); the service also sends this tab
+// whatever the last known state was, right when the socket opens, so a
+// second tab (or a reload) starts in sync rather than from stale defaults.
+const WS_PORT = 8091;
+let ws = null;
+let wsReady = false;
+
+function connectService() {
+  ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+  const status = el('push-status');
+  ws.addEventListener('open', () => {
+    wsReady = true;
+    status.textContent = 'connected to service ✓';
+    status.style.color = '#7fd07f';
+  });
+  ws.addEventListener('close', () => {
+    wsReady = false;
+    status.textContent = 'service disconnected, retrying...';
+    status.style.color = '#e08080';
+    setTimeout(connectService, 1500);
+  });
+  ws.addEventListener('error', () => ws.close());
+  ws.addEventListener('message', (ev) => {
+    try {
+      applyScreenPush(JSON.parse(ev.data));
+    } catch (e) { /* ignore malformed */ }
+  });
+}
+connectService();
+
+// Differential push: the device keeps per-field state (see "Thirteenth
+// finding" in the protocol notes), so we track what we last actually sent
+// and only send a message for a field whose current form value differs from
+// that -- editing the title bar never re-sends names/values/tabs, and vice
+// versa. `layout` (page template) gets special handling: switching it is
+// confirmed to clear per-template content fields (names/values/bigfont/tabs)
+// on the device regardless of whether the switching message touches them,
+// while the title bar is "global chrome" that survives the switch -- so a
+// template-only change is carried on a title-bar write (the one field safe
+// to resend unconditionally) and nothing else, and our bookkeeping for the
+// content fields is invalidated (not resent) so the *next* edit to any of
+// them is treated as a real change instead of being skipped as "unchanged".
+let lastSent = { layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null };
+
+function arraysEqual(a, b) {
+  if (!a || !b) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+function currentState() {
+  return {
+    layout: el('in-layout').value,
+    bigfont: el('in-bigfont').value,
+    titleBar: [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value],
+    names: csv(el('in-names').value),
+    values: csv(el('in-values').value),
+    tabs: csv(el('in-tabs').value),
+  };
+}
+
+function sendField(layout, fields) {
+  if (!wsReady) return;
+  ws.send(JSON.stringify(Object.assign({ layout }, fields)));
+}
+
 let pushTimer = null;
 function pushToDevice() {
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(async () => {
-    const status = el('push-status');
-    try {
-      const res = await fetch('/update_screen', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          layout: el('in-layout').value,
-          titleBar: [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value],
-          names: csv(el('in-names').value),
-          values: csv(el('in-values').value),
-        }),
-      });
-      const data = await res.json();
-      status.textContent = data.ok ? 'pushed to device ✓' : ('not pushed: ' + data.error);
-      status.style.color = data.ok ? '#7fd07f' : '#e08080';
-    } catch (e) {
-      status.textContent = 'not pushed: ' + e;
-      status.style.color = '#e08080';
+  pushTimer = setTimeout(() => {
+    if (!wsReady) return; // status line already shows "disconnected"
+    const cur = currentState();
+    const layoutKnown = lastSent.layout !== null;
+    const layoutChanged = layoutKnown && cur.layout !== lastSent.layout;
+
+    if (layoutChanged) {
+      sendField(cur.layout, { titleBar: cur.titleBar });
+      lastSent = { layout: cur.layout, titleBar: cur.titleBar, bigfont: null, names: null, values: null, tabs: null };
+      return;
+    }
+    if (!layoutKnown) lastSent.layout = cur.layout; // first push ever: adopt silently, no switch to carry
+
+    if (!arraysEqual(cur.titleBar, lastSent.titleBar)) {
+      sendField(cur.layout, { titleBar: cur.titleBar });
+      lastSent.titleBar = cur.titleBar;
+    }
+    if (cur.bigfont !== lastSent.bigfont) {
+      sendField(cur.layout, { bigfont: cur.bigfont });
+      lastSent.bigfont = cur.bigfont;
+    }
+    if (!arraysEqual(cur.names, lastSent.names)) {
+      sendField(cur.layout, { names: cur.names });
+      lastSent.names = cur.names;
+    }
+    if (!arraysEqual(cur.values, lastSent.values)) {
+      sendField(cur.layout, { values: cur.values });
+      lastSent.values = cur.values;
+    }
+    if (!arraysEqual(cur.tabs, lastSent.tabs)) {
+      sendField(cur.layout, { tabs: cur.tabs });
+      lastSent.tabs = cur.tabs;
     }
   }, 350);
 }
@@ -295,23 +390,39 @@ function pushToDevice() {
 document.querySelectorAll('#controls input, #controls select').forEach(i => {
   i.addEventListener('input', () => { renderSimulator(); pushToDevice(); });
 });
+
+// Full-state transmission is a distinct, deliberately-available path, not
+// just an implicit side effect of the differential logic above: one
+// WebSocket frame carrying every field, applied by service.rs in one shot
+// regardless of what the device last held. Useful as a known-good baseline
+// (e.g. before/between isolated tests) and as a manual "resync" if this
+// tab's diff bookkeeping and the device's actual state have drifted apart
+// for any reason (dropped message, another client's write we didn't see, a
+// device power cycle). Bypasses the debounce timer too -- sends immediately.
+function sendFullState() {
+  clearTimeout(pushTimer);
+  const cur = currentState();
+  if (!wsReady) return;
+  ws.send(JSON.stringify(cur));
+  lastSent = Object.assign({}, cur);
+}
+el('full-sync-btn').addEventListener('click', sendFullState);
+
 renderSimulator();
 </script>
 
 <script>
-// Hot-reload (mtime check) AND applying the last screen push from anywhere
-// else -- another browser tab, or any future non-browser caller of
-// POST /update_screen (a CLI tool, hacpad's own bridge, etc.). This is what
-// makes the mockup a true "last known state" mirror instead of only
-// reflecting its own local form inputs.
+// applyScreenPush is also called from the WebSocket 'message' handler above
+// (connectService()) -- that's how this mockup stays in sync with the real
+// device's last-known state from ANY client, not just this tab's own edits.
 let knownHtmlMtime = null;
-let lastAppliedPush = null;
 
 function applyScreenPush(push) {
   if (!push) return;
   // Don't stomp on an in-progress edit in this tab.
   if (document.activeElement && document.activeElement.closest('#controls')) return;
   if (push.layout !== undefined) el('in-layout').value = push.layout;
+  if (push.bigfont !== undefined) el('in-bigfont').value = push.bigfont;
   if (push.titleBar) {
     el('in-tb1').value = push.titleBar[0] || '';
     el('in-tb2').value = push.titleBar[1] || '';
@@ -319,9 +430,24 @@ function applyScreenPush(push) {
   }
   if (push.names) el('in-names').value = push.names.join(',');
   if (push.values) el('in-values').value = push.values.join(',');
+  if (push.tabs) el('in-tabs').value = push.tabs.join(',');
   renderSimulator();
+
+  // This push is itself a record of what's actually on the device (from this
+  // tab's own last send, or another client's) -- fold whatever fields it
+  // carries into our diff baseline so pushToDevice() doesn't re-send them as
+  // "changed" the next time this tab's own inputs are touched.
+  if (push.layout !== undefined) lastSent.layout = push.layout;
+  if (push.bigfont !== undefined) lastSent.bigfont = push.bigfont;
+  if (push.titleBar) lastSent.titleBar = push.titleBar;
+  if (push.names) lastSent.names = push.names;
+  if (push.values) lastSent.values = push.values;
+  if (push.tabs) lastSent.tabs = push.tabs;
 }
 
+// Purely hot-reload now (mtime check) -- state sync is the WebSocket's job
+// (see connectService() above), not this HTTP server's, since server.py has
+// no involvement in screen state at all anymore.
 async function poll() {
   try {
     const res = await fetch('/state.json', {cache: 'no-store'});
@@ -331,13 +457,6 @@ async function poll() {
     } else if (state._html_mtime !== knownHtmlMtime) {
       location.reload();
       return;
-    }
-    if (state.last_screen_push) {
-      const pushKey = JSON.stringify(state.last_screen_push);
-      if (pushKey !== lastAppliedPush) {
-        applyScreenPush(state.last_screen_push);
-        lastAppliedPush = pushKey;
-      }
     }
   } catch (e) { /* ignore, retry next tick */ }
   setTimeout(poll, 700);

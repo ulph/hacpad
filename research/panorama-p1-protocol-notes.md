@@ -910,16 +910,34 @@ that changed since the last flush) — but importantly, **this is real, observab
 not just a JS-side optimization we could ignore**: the device itself appears to hold independent
 per-slot state, and a write that doesn't mention a slot leaves it untouched.
 
-**The only thing that clears everything is switching `pageTemplate`** (confirmed earlier — switching
-resets the whole page via what looks like the same `resetOutputToUnknown()` the real driver calls on a
-template change). Within one template, there is no observed "clear all slots" write — a
-genuinely-blank screen requires either a template switch or explicitly writing an empty string to
-every slot you care about.
+**Correction, after more careful isolated testing (see below): switching `pageTemplate` does NOT reset
+everything indiscriminately.** The original claim here was based on `pageTemplate=1` (the message
+overlay) wiping a `pageTemplate=16` title bar — but `pageTemplate=1` is a special, separate rendering
+pathway (its own fixed byte shape, see "Seventh finding"), not representative of switching between the
+*real* content templates (2, 3, 4, 5, 16-22). Tested cleanly, isolating exactly one field per message
+(so a template-switching message never also happens to rewrite the field being checked):
+- `06 16 01 <title bar A>` then `06 18 02 <bigfont B>` (a **different** template, touching a
+  **different** field, never touching the title bar again) → **the title bar still read exactly what
+  message A set**, unchanged, even though the active template and widget genuinely changed (knobs →
+  faders, correctly reflecting template 18).
+- `06 16 06 <8 names>` then `06 18 02 <bigfont>` (same shape, but the first message set *names* instead
+  of the title bar) → **the names were completely gone** — the fader label area was totally blank
+  after the switch to template 18.
 
-**Consequence for hacpad**: don't assume a partial write leaves the rest of the screen blank — it
-leaves the rest of the screen as whatever was there before, which may be stale content from a
-different logical "screen" you drew earlier in the same template. Any code that wants a clean slate
-should either switch templates or explicitly blank every slot it isn't setting.
+**So there are two different kinds of fields**: `displayId 1` (title bar) behaves like **global
+chrome** that survives a switch between real content templates untouched, while `displayId 6`
+(names — and very plausibly 0/7/8, the other per-widget content fields, untested directly but assumed
+by analogy) is **per-template content** that gets cleared whenever the active template changes to a
+different one, even when the switching message never touches that field. Within the *same* template,
+the original "partial write, stale slots persist" observation still holds for content fields (see the
+`displayId 0` padState example above, still valid — that test never actually changed templates).
+
+**Consequence for hacpad**: yes, genuine differential/partial updates work — you can update just the
+title bar, or just one content field, without resending the whole screen. But a template switch does
+clear per-template content fields (names, values, pad labels, etc.) even if the switching message
+doesn't touch them, while it leaves the title bar (and probably other "chrome" fields) alone. Design
+around that: treat the title bar as safe to set once and leave alone across template changes, and
+always replan content-field writes fresh after switching templates.
 
 ### `main.rs` integration note: switching pageTemplate resets the page
 
@@ -931,6 +949,74 @@ the whole page context** (matches the real driver's `resetOutputToUnknown()` cal
 pageTemplate-16 write wipes out what the 16-write drew. These two mechanisms don't currently coexist
 in one session; `main.rs` was left using `write_message` only for its default screen text pending
 further mapping of whether any single template offers both a title bar and a message-shaped field.
+
+### Follow-up: `displayId 4` (menu buttons) works with ANY template, not just template 2
+
+The original template-2 test used `displayId 4` together with `pageTemplate 2` specifically, leaving
+an open question: does relabeling the bottom menu-button row require switching to template 2 (which
+would conflict with whatever content template is active, since switching templates resets everything
+— see "Thirteenth finding"), or is `displayId 4` just an ordinary field addressable within *any*
+template? Tested: `06 10 04 <5 entries>` (template `16`, i.e. Mixer/knobs, not `2`). **Confirmed: this
+works** — the bottom row changed to the new labels while the title bar, big-font readout, and all 8
+knobs stayed completely intact. So `displayId 4` composes freely with content fields on the same
+template; there was never a need to switch to template 2 for this at all. This is now wired into the
+webcam-viewer's screen simulator and the Rust service (see `write_tabs` in `src/lib.rs`) — the bottom
+tabs input was previously cosmetic-only in the browser mockup, never actually pushed.
+
+### `displayId` addressing is template-independent, confirmed across the board
+
+Also tested `displayId 2` (big font) on template `21` (the pad grid) — a template about as visually
+different from `16` (knobs) as any two tested. **Confirmed working**: `"PADFONT"` rendered in the same
+big-font slot, everything else (title bar defaulting back to `Nektar`/`Panorama P1`/`1-NEKTAR 1` since
+untouched, and stale pad labels left over from an earlier test) exactly as expected. Combined with the
+title-bar (7 templates), names (6 templates), and menu-button (2 templates) results above, every
+`displayId` tried so far works identically regardless of which template is active — strong evidence
+that `displayId` is a genuinely universal addressing scheme, and the page template *only* determines
+which widget renders the content fields (knobs vs. faders vs. pads vs. list), not which fields exist.
+Not exhaustively proven for every template × displayId combination (13 × 9 = 117 possible pairs, a
+few dozen tried), but no exception found yet.
+
+### Fourteenth finding: title bar isn't the only "chrome" field — big font and menu buttons persist too
+
+The Thirteenth finding's "title bar is chrome, everything else is per-template content" rule was
+itself under-tested — it only ever compared title bar (persists) against names (cleared). Ran a
+clean, three-step isolated test through the new webcam-viewer/service architecture (`ws://…:8091`),
+photographing the real screen after each step:
+1. **Full-state baseline** (one WebSocket frame, every field at once — the "Send full state" button /
+   the underlying `sendFullState()` path in `index.html`): title bar `HACPAD`/`DIFF TEST`/`BASE`,
+   big font `BASELINE`, 8 knob names+values, 5 tabs, on template 16 (knobs). Photo confirms all of it
+   rendered.
+2. **Template-only switch**: sent `{"layout": "faders-split", "titleBar": [...same 3 segments...]}`
+   only — no bigfont, names, values, or tabs in this message at all. Photo shows: title bar unchanged
+   (as expected), **but also big font (`BASELINE`) and all 5 tabs (`Faders`/`Encoders`/`Cntrl
+   Edit`/`Global`/`Setup`) still showing, untouched** — only the fader labels went blank (8 empty fader
+   tracks, template 18's widget correctly rendered but with no `ctrlElementName` content).
+3. **Isolated names-only resend**: sent `{"layout": "faders-split", "names": ["X1".."X16"]}` (16
+   entries, to also re-confirm the stacked-label mapping). Photo shows the labels appear correctly
+   (`X1`-`X4`/`X5`-`X8` stacked on the left group of 4 faders, `X9`-`X12`/`X13`-`X16` on the right),
+   while title bar, big font, and tabs are still exactly what they were in step 1 — completely
+   unaffected by either the switch or this resend.
+
+**Revised model**: it's not just `displayId 1` that's "global chrome" — `displayId 1` (title bar),
+`displayId 2` (big font), and `displayId 4` (menu buttons/tabs) all persist across a switch between
+real content templates. Only `displayId 6` (`ctrlElementName`) is confirmed **per-template content**
+that gets cleared on switch even when untouched by the switching message. `displayId 7`
+(`ctrlElementValue`, paired with names) is still not directly isolated — the knobs-only values field
+was never present during the faders-split leg of this test — but by analogy to names (its paired
+field, same per-widget-content role) it's assumed to be per-template too, not chrome.
+
+**Consequence for hacpad**: the safe-to-set-once "chrome" set is bigger than first thought — title
+bar, big font, *and* the bottom tab row can all be set once and left alone across template switches,
+not just the title bar. Only the actual per-widget content (names, presumably values, pad labels)
+needs replanning after every switch. This is exactly the differential-update model now implemented in
+`tooling/webcam-viewer/index.html`'s `pushToDevice()`: editing any one field sends only that field's
+write; changing the template dropdown alone sends only a title-bar-carried switch message (since title
+bar is guaranteed chrome and is enough to carry the new template id); a dedicated "Send full state"
+button bypasses all of this and sends every field in one frame, for a well-defined known-good baseline
+(used to reset the device between tests above) or a manual resync if a client's diff bookkeeping and
+the device's real state have drifted apart.
+
+## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
 sent SysEx message actually changed the display, without needing the official software or a second

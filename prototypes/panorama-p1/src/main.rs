@@ -8,10 +8,14 @@
 //!      real hardware.
 //!   2. Write to the P1's own screen via vendor SysEx (output/feedback).
 //!      **Confirmed working** against real hardware -- text (including
-//!      multi-line ASCII banners, `\n`-separated) renders correctly. The
-//!      missing piece for most of this investigation was the port mapping
-//!      (see PORT_DEFAULT/PORT_ONE below and research/panorama-p1-protocol-notes.md,
-//!      "Fifth finding"), not the message bytes, which were already correct.
+//!      multi-line ASCII banners, `\n`-separated) renders correctly.
+//!
+//! The actual protocol implementation (constants, SysEx builders, port
+//! helpers) lives in src/lib.rs now, shared with every other binary in this
+//! crate (msg_test, led_test, chunk_test, and service -- the persistent
+//! WebSocket-facing service the webcam-viewer's screen simulator talks to).
+//! This binary keeps only what's specific to it: CC-input decoding and the
+//! demo main() loop.
 //!
 //! Protocol facts (SysEx structure, CC map, port mapping) are written up in
 //! research/panorama-p1-protocol-notes.md, cross-checked against Nektar's own
@@ -28,107 +32,9 @@ use std::env;
 use std::error::Error;
 use std::time::Duration;
 
-use midir::{MidiInput, MidiInputPort, MidiOutput, MidiOutputPort};
+use midir::{MidiInput, MidiOutput};
 
-// --- SysEx protocol ------------------------------------------------------
-// F0 00 01 77 7F 01 ...  F7
-//   00 01 77 = Nektar's registered 3-byte MIDI SysEx manufacturer ID
-//   7F 01    = device/model + unit byte (unverified, assumed fixed for P1)
-
-const SYSEX_PREFIX: [u8; 6] = [0xF0, 0x00, 0x01, 0x77, 0x7F, 0x01];
-const SYSEX_END: u8 = 0xF7;
-
-// Lifecycle messages (bytes after the manufacturer prefix, before F7).
-// Confirmed byte-for-byte against the official driver's nektarinit()/nektarexit().
-const INIT_LINUX_ONLY: [u8; 7] = [0x08, 0x01, 0x00, 0x00, 0x01, 0x01, 0x75];
-const INIT_1: [u8; 7] = [0x08, 0x02, 0x00, 0x00, 0x01, 0x01, 0x73];
-const INIT_2: [u8; 7] = [0x09, 0x03, 0x00, 0x00, 0x01, 0x3E, 0x34];
-// Not sent by this simple demo loop (it blocks forever until Ctrl-C kills the
-// process outright, with no clean-shutdown hook) -- kept here, confirmed
-// correct, for whenever the bridge grows a real shutdown path.
-#[allow(dead_code)]
-const EXIT_1: [u8; 7] = [0x09, 0x00, 0x00, 0x00, 0x01, 0x00, 0x75];
-#[allow(dead_code)]
-const EXIT_2: [u8; 7] = [0x08, 0x02, 0x00, 0x00, 0x01, 0x00, 0x74];
-
-const CMD_WRITE_DISPLAY: u8 = 0x06;
-
-// The dedicated one-shot "message" page-template constant, confirmed from
-// `PANORAMA_P1.control.js`'s pageTemplate enum (`MESSAGE: 1`) and used by
-// `writeMessageToDisplay()`/`OutputState.prototype.send()`'s message branch.
-// NOT the 02 we originally guessed before finding the official driver.
-const MSG_PAGE_TEMPLATE: u8 = 0x01;
-
-/// Real ports the official driver uses -- CORRECTED per the official "Using
-/// Panorama P-Series with Bitwig Studio" guide's Linux port-config table
-/// ("Output1: Instrument, Output2: Internal"): the default output port
-/// (Bitwig's bare `sendSysex()`, no port arg) is "Instrument"; the one
-/// explicit `host.getMidiOutPort(1)` call (used only for the Linux-only init
-/// message) is "Internal". This is the REVERSE of what earlier testing this
-/// session assumed -- see research/panorama-p1-protocol-notes.md, "Fifth
-/// finding" -- and was the actual reason display writes weren't rendering.
-const PORT_DEFAULT: &str = "PANORAMA P1 Instrument";
-const PORT_ONE: &str = "PANORAMA P1 Internal";
-
-fn sysex(body: &[u8]) -> Vec<u8> {
-    let mut msg = SYSEX_PREFIX.to_vec();
-    msg.extend_from_slice(body);
-    msg.push(SYSEX_END);
-    msg
-}
-
-/// The "quick message" one-shot display write (`writeMessageToDisplay` in the
-/// real driver). Simpler than the full per-field page-composition path and
-/// doesn't need live DAW session state to construct. **Confirmed working**:
-/// renders on the real screen, including multi-line text via embedded `\n`.
-fn write_message(text: &str) -> Vec<u8> {
-    let bytes = text.as_bytes();
-    let mut body = vec![CMD_WRITE_DISPLAY, MSG_PAGE_TEMPLATE, 0x00, 0x00, bytes.len() as u8];
-    body.extend_from_slice(bytes);
-    body.push(0x04); // trailing type/terminator byte before F7, per the real driver
-    sysex(&body)
-}
-
-// A "real" DAW page template (Bitwig's Mixer page, per the driver's own
-// pageTemplate enum). Confirmed on real hardware: writing to this template's
-// titleBar field doesn't require a live Bitwig session -- see
-// research/panorama-p1-protocol-notes.md, "Tenth finding".
-const PAGE_TEMPLATE_MIXER: u8 = 16;
-// DISPLAY_ID.titleBar, confirmed by direct extraction from the driver's
-// DISPLAY_ID enum (not a guess) -- see protocol notes, "Tenth finding".
-const DISPLAY_ID_TITLE_BAR: u8 = 1;
-
-/// The general per-field page-composition write (`composeStart`/`textEntry`/
-/// finish in the real driver) -- structurally distinct from `write_message`'s
-/// fixed shape. Confirmed working for several fields this session (title bar,
-/// menu-button labels, encoder name/value, big-font readout).
-fn compose_write(page_template: u8, display_id: u8, entries: &[(u8, &str)]) -> Vec<u8> {
-    let mut body = vec![CMD_WRITE_DISPLAY, page_template, display_id];
-    for (i, (index, text)) in entries.iter().enumerate() {
-        if i > 0 {
-            body.push(0x00);
-        }
-        let bytes = text.as_bytes();
-        body.push(*index);
-        body.push(bytes.len() as u8);
-        body.extend_from_slice(bytes);
-    }
-    sysex(&body)
-}
-
-/// Sets the 3-segment title bar (confirmed real position: the row directly
-/// under the big-font readout). This is the right spot for anything meant to
-/// stay put -- unlike the big-font `currentParameterInfo` field, nothing else
-/// is fighting to overwrite it (see protocol notes, "Twelfth finding").
-fn write_title_bar(segments: [&str; 3]) -> Vec<u8> {
-    let entries: Vec<(u8, &str)> = segments
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| !s.is_empty())
-        .map(|(i, s)| ((i + 1) as u8, *s))
-        .collect();
-    compose_write(PAGE_TEMPLATE_MIXER, DISPLAY_ID_TITLE_BAR, &entries)
-}
+use panorama_bridge::*;
 
 // --- CC map ---------------------------------------------------------------
 // Confirmed against real hardware this session (fader/encoder/button CCs
@@ -205,20 +111,6 @@ fn decode_cc(cc: u8, value: u8) -> Event {
     }
 }
 
-fn find_out_port(out: &MidiOutput, needle: &str) -> Result<MidiOutputPort, Box<dyn Error>> {
-    out.ports()
-        .into_iter()
-        .find(|p| out.port_name(p).map(|n| n.contains(needle)).unwrap_or(false))
-        .ok_or_else(|| format!("no MIDI output port matching {needle:?}").into())
-}
-
-fn find_in_port(inp: &MidiInput, needle: &str) -> Result<MidiInputPort, Box<dyn Error>> {
-    inp.ports()
-        .into_iter()
-        .find(|p| inp.port_name(p).map(|n| n.contains(needle)).unwrap_or(false))
-        .ok_or_else(|| format!("no MIDI input port matching {needle:?}").into())
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let text = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let text = if text.is_empty() { "hacpad".to_string() } else { text };
@@ -247,10 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // NOTE: sending a pageTemplate=1 (write_message) after a pageTemplate=16
     // (write_title_bar) write clears the title bar -- switching pageTemplate
     // resets the whole page context, so these two don't currently coexist in
-    // one session. Left as write_message only for now; revisit once the
-    // template map (in progress) says whether there's a page that has both a
-    // title bar AND a message-shaped field, or whether these are simply
-    // mutually exclusive display modes.
+    // one session (see "Thirteenth finding" in the protocol notes).
     println!("Writing screen message: {text:?}");
     default_conn.send(&write_message(&text))?;
 

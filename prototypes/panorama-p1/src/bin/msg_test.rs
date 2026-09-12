@@ -172,7 +172,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         for (i, m) in messages.iter().enumerate() {
             println!("Sending message {} of {} ({} bytes)...", i + 1, messages.len(), m.len());
             default_conn.send(m)?;
-            sleep(Duration::from_millis(100));
+            // Long gap so each step can be individually photographed, not
+            // just the final state -- see the "isolated step" diagnostic in
+            // the protocol notes.
+            sleep(Duration::from_millis(5000));
         }
         println!("Holding for 8s so we can photograph the screen...");
         sleep(Duration::from_secs(8));

@@ -20,6 +20,19 @@ In-memory webcam viewer server for Panorama P1 debugging.
 - POST /set with a JSON body merges into STATE -- this is the channel for
   pushing live debug info (focus value, sharpness score, crop box, notes)
   without restarting anything.
+
+This server has NO involvement in talking to the Panorama P1 -- that used to
+live here (a Python MIDI link via panorama_midi.py) but was deliberately
+removed: having both this process AND the Rust bridge independently able to
+open a connection to the device was the wrong architecture (two things that
+could both think they own "the" connection, and a second, drifting
+implementation of the SysEx protocol to keep in sync with the real one in
+prototypes/panorama-p1/src/lib.rs). The webcam-viewer page's screen
+simulator now talks directly to prototypes/panorama-p1/src/bin/service.rs
+(a persistent WebSocket service that holds the one real device connection)
+over its own WebSocket, independent of this HTTP server entirely -- see
+index.html. This process only ever serves the webcam feed and static debug
+UI now.
 """
 import json
 import os
@@ -29,36 +42,10 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import panorama_midi
-
 DEVICE = sys.argv[1] if len(sys.argv) > 1 else "/dev/video0"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8090
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
-REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
-LOGO_PNG = os.path.join(ASSETS_DIR, "logo.png")
-
-# Best-effort: the simulator's live-push-to-device feature just won't work
-# (POST /update_screen returns an error) if the P1 isn't connected -- doesn't
-# block the webcam feed or the rest of the page from working.
-panorama_link = panorama_midi.PanoramaLink()
-try:
-    panorama_link.connect()
-    print("Panorama P1 MIDI link connected -- simulator edits will push to the real device.")
-except Exception as e:
-    print(f"Panorama P1 MIDI link not available ({e}) -- simulator will preview only, no live push.")
-
-
-def find_logo_txt():
-    """Pick the logo_NxM.txt ASCII-art file in assets/, if any (dimensions
-    are encoded in the filename since we regenerate this at different sizes
-    -- rows x columns -- while iterating)."""
-    try:
-        candidates = sorted(f for f in os.listdir(ASSETS_DIR) if f.startswith("logo_") and f.endswith(".txt"))
-    except OSError:
-        return None
-    return os.path.join(ASSETS_DIR, candidates[0]) if candidates else None
 
 SOI = b"\xff\xd8"
 EOI = b"\xff\xd9"
@@ -126,12 +113,6 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_stream()
         elif self.path == "/state.json":
             self._serve_state()
-        elif self.path == "/logo.png":
-            self._serve_file(LOGO_PNG, "image/png")
-        elif self.path == "/logo.txt":
-            self._serve_logo_txt()
-        elif self.path == "/simulator.html" or self.path == "/simulator":
-            self._serve_file(os.path.join(HERE, "simulator.html"), "text/html; charset=utf-8")
         else:
             self.send_response(404)
             self.end_headers()
@@ -150,46 +131,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
-        elif self.path == "/update_screen":
-            self._handle_update_screen()
         else:
             self.send_response(404)
             self.end_headers()
-
-    def _handle_update_screen(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length else b"{}"
-        try:
-            data = json.loads(body or b"{}")
-        except json.JSONDecodeError:
-            data = {}
-
-        if not panorama_link.connected:
-            self.send_response(503)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":false,"error":"Panorama P1 not connected"}')
-            return
-
-        with state_lock:
-            STATE["last_screen_push"] = data
-
-        try:
-            panorama_link.update_screen(
-                layout=data.get("layout", "knobs"),
-                title_bar=data.get("titleBar", ["", "", ""]),
-                names=data.get("names", []),
-                values=data.get("values", []),
-            )
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-        except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode())
 
     def _serve_index(self):
         try:
@@ -203,29 +147,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
-
-    def _serve_file(self, path, content_type):
-        try:
-            with open(path, "rb") as f:
-                body = f.read()
-        except FileNotFoundError:
-            self.send_response(404)
-            self.end_headers()
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _serve_logo_txt(self):
-        path = find_logo_txt()
-        if path is None:
-            self.send_response(404)
-            self.end_headers()
-            return
-        self._serve_file(path, "text/plain; charset=utf-8")
 
     def _serve_state(self):
         with state_lock:
