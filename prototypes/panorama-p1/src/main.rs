@@ -62,6 +62,14 @@ fn cc_name(cc: u8) -> String {
             ["play", "stop", "record", "rewind", "forward"][(cc - 81) as usize].to_string()
         }
         91..=95 => format!("nav_{}", cc - 91 + 1), // unverified mapping
+        // Confirmed from PANORAMA_P1.control.js's onMidi CC dispatch (Z811481AF53E7994F1),
+        // then verified live via the physical device (Twenty-eighth finding):
+        96 => "shift".to_string(), // momentary; source sets a boolean gate flag on value>0/0
+        103 => "mode".to_string(), // source: setActiveDisplayPage(internalPage) on press
+        107 => "screen_button_1".to_string(),
+        108 => "screen_button_2".to_string(),
+        109 => "screen_button_3_exit".to_string(), // confirmed live: closes the popup menu (onMenuCancel) when one is open
+        110 => "menu_enter".to_string(), // confirmed live: onMenuEnter when a popup menu is open
         _ => format!("cc_{cc}"),
     }
 }
@@ -70,7 +78,7 @@ fn cc_kind(cc: u8) -> CcKind {
     match cc {
         0..=7 | 14 => CcKind::Fader,
         48..=55 | 64..=71 => CcKind::Encoder,
-        16..=23 | 81..=85 | 91..=95 => CcKind::Button,
+        16..=23 | 81..=85 | 91..=95 | 96 | 103 | 107..=110 => CcKind::Button,
         _ => CcKind::Unknown,
     }
 }

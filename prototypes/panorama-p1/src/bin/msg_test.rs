@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let text = args.join(" ");
+    let text = args.iter().filter(|a| a.as_str() != "--persist").cloned().collect::<Vec<_>>().join(" ");
     let text = if text.is_empty() { "HACPAD".to_string() } else { text };
 
     let default_out = MidiOutput::new("hacpad-default")?;
@@ -206,12 +206,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     println!();
 
-    // A single send is sufficient and persists on screen (confirmed once the
-    // port mapping was fixed) -- resending on a timer was only ever a test
-    // for the "does it need a refreshed write" hypothesis (disproved), and
-    // just causes a visible redraw flicker for no benefit. Send once, hold
-    // quietly.
     default_conn.send(&msg)?;
+
+    // `--persist` (or `PERSIST=1` in the environment): don't send the exit
+    // sequence at all -- just park here, holding the connection open, so
+    // whatever we just drew stays on screen indefinitely instead of being
+    // wiped by EXIT_1/EXIT_2 a few seconds later (confirmed: exit resets the
+    // display to its default appearance -- see the Seventeenth/Eighteenth
+    // findings' methodology note). Used to make a `msg_test hacpad`-style
+    // write actually stick as the resting baseline between tests, rather
+    // than just flashing for 8s. Ctrl-C (or killing the process) to release
+    // the connection for the next test.
+    if args.iter().any(|a| a == "--persist") || std::env::var("PERSIST").is_ok() {
+        println!("Persisting -- holding connection open indefinitely (no exit sequence). Ctrl-C to release.");
+        loop {
+            sleep(Duration::from_secs(3600));
+        }
+    }
+
     println!("Holding for 8s so we can photograph the screen...");
     sleep(Duration::from_secs(8));
 

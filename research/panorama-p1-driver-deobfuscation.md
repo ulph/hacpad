@@ -76,14 +76,16 @@ hash-style identifiers. **317 distinct such identifiers** counted (`grep -oE '\b
 | `Z8106E8AB83F533169` | enum `{MACRO, SENDS}`-shaped (2+ values) | `encSubPage` enum |
 | `Z8107103393F50CCA0` | enum with `.ENCODER`, `.PADS` | a `subPage` enum |
 | `Z810707FF73F519DC2` | enum with `.CLIPS`, `.SCENES` | a `padsSubPage` enum |
-| `Z8114DFD213E74EEB9` | boolean, gates alternate transport/clip-launcher button behavior everywhere (Play/Stop/Record/Loop) | candidate: the physical **Shift** button state (P1 has a labeled Shift key; matches the "hold for alternate function" pattern exactly) — NOT yet confirmed by triggering it via MIDI input |
+| `Z8114DFD213E74EEB9` | **CONFIRMED: Shift button state** | Write-site found: `case CC.Z8103EE82A3F8314DF: Z8114DFD213E74EEB9=0<e; ...` (in the incoming-CC dispatch, `Z8103EE82A3F8314DF`=CC 96). Read-site gates alternate Play/Stop/Record/Loop behavior everywhere, exactly the "hold for alternate function" pattern. Not yet re-triggered live via holding physical Shift to watch the alternate-button behavior fire, but the flag identity itself is now certain. |
 | `Z810D28CA53EEF2221` | a number, compared with `1<` to pick between two 0x0B selector bytes for the same button | candidate: a menu/category "depth" or "zoom" counter, not yet named with confidence |
+| `Z81048047C3F79F700` | **CC 109, "screen button 3"** — confirmed live (Twenty-eighth finding) to be the popup-menu **exit/cancel** button: `case CC.Z81048047C3F79F700: ...if(menuHandler.isActive) menuHandler.onMenuCancel(); else ... onScreenButton(3)` | Pressed physically while capturing raw input; matches source exactly |
+| `Z8104967483F781F8A` | **CC 110, "menu enter"** — confirmed live: `case CC.Z8104967483F781F8A: if(menuHandler.isActive) menuHandler.onMenuEnter();` | Pressed physically directly after the exit test; matches source exactly |
+| `Z8103EE82A3F8314DF` | **CC 96 — Shift** (see `Z8114DFD213E74EEB9` above) | write-site for the Shift flag |
+| `Z8106041EB3F613A4B` | **CC 103 — Mode** button: `case CC.Z8106041EB3F613A4B: 0<e?(setActiveDisplayPage(internalPage),...):setActiveDisplayPage(Z810D7CD223EEA2020)` | plausibly the physical Mode button tied to the "Internal mode" bypass from the Fifth finding — not yet cross-checked live |
+| `Z810AD4A753F1454A0` | the currently-active page/view object (dispatch target for `onScreenButton(n)` and `.onRemoveMenu()`) | referenced constantly alongside `menuHandler`/`SurfaceStatus` state; candidate: `currentPage` |
 
 ## Open threads / next steps
 
-- Confirm the `Z8114DFD213E74EEB9` = Shift hypothesis: find its write-site(s) — should be a plain CC or
-  note handler tied to the physical Shift key's MIDI input, not a DAW-internal observer. If confirmed,
-  we gain a general "how do I read Shift state" tool for future tests.
 - The `menuButtonType` entry (index 0, length 5, raw enum bytes) has never been replicated on hardware —
   worth a direct test: send `displayId 4` with an index-0 entry (`00 05 <5 bytes of 0/1>`) alongside the
   normal 5 labels, see if button rendering changes (border/style difference between type 0 vs 1).

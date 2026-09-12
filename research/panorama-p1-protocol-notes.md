@@ -1314,13 +1314,12 @@ DISPLAY_ID:   {0, 1, 2, 3, 4, 5, 6, 7, 8}                       -- matches our c
   1-based text-label entries in the same `displayId 4` message. This is a real, deliberate use of index
   0 (relevant to checklist item 5, "compose-entry malformation... index 0") -- it's not malformed at
   all, it's how the type array is distinguished from the per-button label entries.
-- **Genuine surprise: `displayId 8` (our "mystery box," see the Nineteenth finding) is never referenced
-  anywhere in `OutputState.prototype.send()`.** It exists in the `DISPLAY_ID` enum (value 8) but this
-  driver version never actually sends it during normal operation. The box we found on real hardware is
-  a field the P1's firmware clearly supports, but that Bitwig's own shipped driver never exercises --
-  genuinely undocumented from Bitwig's own perspective, not just missed by us. (Could be reserved for a
-  future feature, a different DAW's driver, or a different firmware/driver version than the one
-  archived here.)
+- **`displayId 8` is never referenced in `OutputState.prototype.send()` -- but that claim was too
+  strong; CORRECTED in the Twenty-sixth finding below.** It's genuinely absent from the normal
+  compose/flush path (`send()` never touches it), but the driver DOES send it elsewhere, by hand,
+  outside that function -- it's Bitwig's patch/preset browse popup menu. Leaving this paragraph in
+  place rather than deleting it, since "not in `send()`" is still an accurate, useful fact (explains why
+  it never shows up during ordinary mixer/fader use) -- just don't read it as "never sent at all."
 
 **Follow-up hardware test, prompted by finding the CC-106 mapping in source**: re-ran `led_test on` with
 the bottom tab row actually populated with real labels this time (previously always tested against a
@@ -1357,6 +1356,193 @@ F0 00 01 77 7F 01 06 01 00 00 06 68 61 63 70 61 64 04 F7
 Going forward, reset the device to this state between isolated tests instead of the older
 full compose-mode JSON baseline (title bar/big font/tabs/names/values) -- simpler, and it's what's
 actually preferred as the resting look.
+
+**Gotcha, and the fix**: `msg_test` always sends the lifecycle exit sequence (`EXIT_1`/`EXIT_2`) right
+before the process quits -- and per the methodology note in the Seventeenth/Eighteenth findings, that
+exit sequence **resets the display back to its default appearance**. So a plain `msg_test hacpad` only
+shows "hacpad" for its ~8s hold window, then reverts -- it does not actually establish a resting
+baseline. Added a `--persist` flag (`msg_test --persist hacpad`) that holds the MIDI connection open
+indefinitely after sending (no exit sequence ever sent) instead of the normal 8s-hold-then-exit -- run it
+in the background (`nohup ... &`) and it keeps "hacpad" on screen for as long as that process lives, only
+releasing the connection when killed (needed before any other tool that wants exclusive access, e.g.
+another `msg_test`/`service` invocation). Pair with `led_test off` to also clear any LED state left over
+from a previous test (safe to run concurrently -- it's a separate, independent MIDI connection, no
+init/exit handshake of its own to conflict with the persisted one).
+
+### Twenty-fourth finding: items 5 and 7 — malformed compose entries are safely ignored; the type-flag hypothesis is a negative result
+
+**Item 7**: replicated the `menuButtonType` mechanism found in source (Twenty-third finding) directly —
+sent `displayId 4` with the special index-0 entry (`00 05 <5 raw bytes>`, alternating `0,1,0,1,0`) followed
+by 5 normal text labels ("TypeA"/"TypeB" alternating). Transmitted cleanly (no error). **Result: no
+visible rendering difference between type 0 and type 1** — all 5 buttons rendered identically (same blue
+background, same style), confirmed by a zoomed crop of the tab row. Whatever `menuButtonType` actually
+controls, it isn't a visible border/highlight/color difference on this hardware, at least not for these
+two enum values. Negative result -- the "highlight flag" framing from the original checklist item wording
+turned out not to describe an obviously-visible effect.
+
+**Item 5** (compose-entry malformation), three sub-tests, all on `displayId 6` (names), each blank-first
+and isolated:
+- **Index 0** on a normal field: `06 10 06 00 04 "ZERO" F7` — no visible effect (no "ZERO" text anywhere).
+  Confirms index 0 really is a special sentinel reserved for the menu-button-type entry, not a generic
+  "0th slot" for ordinary fields.
+- **Out-of-range index (99)**: `06 10 06 63 05 "IDX99" F7` — no visible effect, no crash.
+- **Mismatched length byte** (claims length 10, only 3 bytes of text follow before `F7`):
+  `06 10 06 01 0A "ABC" F7` — no visible effect, no crash, no garbled/corrupted display state, and no
+  ALSA transmission error either.
+
+All three transmitted and completed cleanly (`returncode=0`, no error line) — the device (or its SysEx
+parser) tolerates all of these malformed/out-of-spec compose entries safely, silently discarding them
+rather than crashing, corrupting subsequent display state, or doing anything unexpected. Good news for
+robustness, but means none of these particular malformations reveal anything new about the protocol.
+Items 5 and 7 are now considered closed (tested, safe, no effect found).
+
+### Twenty-fifth finding: no template shows literally every field, but template 21 comes close (7 of 9) — and pad_state IS visible after all
+
+Asked directly: "is there any template that displays ALL fields?" Tested empirically rather than
+guessing -- sent all 9 known `displayId`s (0,1,2,3,4,5,6,7,8) in one session on template 21 (`drum_pads`,
+the template that already combines the most fields: pad content + the standard chrome), each with
+distinctive content, and photographed the combined result.
+
+**7 of 9 fields showed up simultaneously**: title bar (`ALLTB1`/`ALLTB2`/`ALLTB3`), big font
+(`BIGFONT`), current-parameter-value (`PARAMVAL`), the bottom tab row (`Tab1`-`Tab5`), the names field
+(only in rows A/B, 8 slots -- confirms the existing per-template slot-count finding still holds even
+in this combined test, rows C/D stay genuinely blank), the "mystery box" (displayId 8, rendering over
+part of rows C/D on the right side), and -- a correction -- **pad_state (displayId 0)**.
+
+**Correction to the "pad_state confirmed NOT a text field" framing**: that's still literally true (it's
+not text), but it's not invisible either -- sending raw byte value `1` for indices 1-8 made those 8 pads
+(rows A/B) render with a visible **red/pink tint** instead of the template's default blue. `pad_state`
+is a real, visible **color/lit-state indicator** (matches the "on/off/recording/queued" clip-state enum
+identified from source in the Twenty-third finding), just never text -- our original "no effect" framing
+from the very first pad_state test undersold it.
+
+**Not shown**: `page_labels` (5) and `ctrl_element_value` (7) produced no visible output anywhere on this
+template. Most likely explanation: both need a template-specific rendering slot that simply doesn't
+exist on the drum-pad layout (page_labels rendered near the first knob position on template 16 in an
+earlier test; ctrl_element_value's real partner, `faderElementValue`, naturally wants a fader/knob
+value readout, which template 21's pad grid has no equivalent of) -- the write itself doesn't error,
+there's just nowhere for the template to draw it. Template 16 (knobs) is the natural next candidate to
+test, since it's the one place `page_labels` was ever seen rendering and knobs have per-item value
+readouts that `ctrl_element_value` could plausibly use.
+
+**Answer**: no, no single template shows literally all 9 fields at once -- but template 21 gets very
+close (7/9), and the 2 that don't show are plausibly a "no slot for it on this template" limitation
+rather than the fields being broken or unreachable.
+
+### Twenty-sixth finding: displayId 8 identified from source — it's the patch/preset browse popup menu
+
+Prompted directly: "we got the popup menu also, but I suppose you understand how that works" -- read
+`menuHandler.showMenu`/`onMenuEncoder`/`onMenuCancel`/`clearMenu` in source to check. Confirmed: our
+"mystery box" (`displayId 8`) is exactly Bitwig's **patch/preset/category browse popup menu**, not an
+unused or reserved field (correcting the Twenty-third finding's claim that it's never sent -- it's just
+never sent through the normal `OutputState.send()` compose path; `menuHandler` builds and sends its own
+SysEx string by hand, separately).
+
+**`menuHandler.showMenu(items, menuCallback, offset)`** builds, verbatim:
+```
+"F0 00 01 77 7F 01 06 00 08 " + <index,len,text entries for up to 8 items, same shape as every other
+compose write> + "F7"
+```
+Two things stand out:
+- **`page_template` is hardcoded to `0`** (the reset sentinel) regardless of whatever template is
+  actually active -- the popup is meant to overlay on top of the current page, not replace it via a
+  normal template switch. This is an exception to reset's documented "field writes have zero effect"
+  behavior (Thirteenth finding) -- apparently that only applies to the *normal* compose fields, not this
+  one.
+- Only `MAX_PAGEMENU_ITEMS=24` items exist per menu in total, paginated in chunks of **8** via `offset`
+  (`this.offset=c?c:0`, `this.numItems=min(24,a.length-offset)`). `onMenuEncoder` increments/decrements
+  `selectedMenuItem`, and crossing a page boundary (below 0 or above 8) calls `showMenu` again with
+  `offset±8` to redraw the next/previous page of 8 -- **this is what the up/down triangles we
+  photographed are for**: page-scroll indicators, not a per-item scrollbar.
+- The **currently-highlighted item within a page** is communicated separately, as a **plain Control
+  Change**: `delayIndicator()` (scheduled 20ms after every `showMenu` call) and `onMenuEncoder` both send
+  `CC 111 = selectedMenuItem` -- not part of the SysEx text at all, matching the same "highlight state is
+  a CC, not SysEx text" pattern already found for `menuButtonOn` (Twenty-third finding).
+- **Dismissing it** (`clearMenu()`, called from `onMenuCancel`): a fixed, minimal SysEx --
+  `F0 00 01 77 7F 01 06 00 08 00 00 F7` (an empty, zero-length first entry on the same `page_template=0`/
+  `displayId=8` pair) -- followed by `resetOutputToUnknown()` to force every other field to redraw fresh
+  next time.
+
+None of this has been directly confirmed on hardware yet (we've only sent our own guessed content to
+`displayId 8`, not replicated this exact populate/paginate/highlight/dismiss cycle) -- added as checklist
+item 13, a standing hardware-verification task, per explicit request ("if we do not know how to populate
+that menu or dismiss it, that warrants it's own addition to the loop").
+
+### Twenty-seventh finding: the popup menu (displayId 8) confirmed on hardware — populate and highlight work, dismiss does not
+
+Checklist item 13: replicated the exact byte shapes identified from `menuHandler` (Twenty-sixth finding)
+against real hardware, one isolated session, blank-first, five steps each photographed:
+
+1. **Blank** (reset, reference point).
+2. **Populate**: `06 00 08` + 8 indexed text entries (`Item1`..`Item8`) -- **confirmed**: renders exactly
+   as a real scrollable list inside the box on the right side of the screen, overlaid on top of the
+   *already-showing* template 21 pad grid from an earlier test without disturbing it at all -- direct
+   confirmation that `page_template=0` really does act as a non-destructive overlay target, not a real
+   template switch (matches the source's design intent exactly).
+3. **Highlight, `CC 111 = 3`**: `Item3`'s row changed to a solid red/pink highlight bar, all other rows
+   stayed the default blue -- **confirmed**, exactly as `menuHandler.onMenuEncoder`/`delayIndicator`
+   predicted (a plain Control Change, no SysEx involved, drives which row is highlighted).
+4. **Highlight, `CC 111 = 5`**: the highlight bar moved to `Item5` -- **confirmed** the highlight
+   genuinely tracks the CC value live, not a one-time paint.
+5. **Dismiss**: sent the exact `clearMenu()` bytes, `F0 00 01 77 7F 01 06 00 08 00 00 F7` -- **no visible
+   change at all**. A zoomed pixel comparison against the previous (highlight5) step shows the popup
+   still fully populated with all 8 items and `Item5` still highlighted. The dismiss write did not
+   visually clear anything.
+
+**Follow-up, resolved**: checked source further -- every `onRemoveMenu()` implementation
+(`DisplayPage.prototype.onRemoveMenu`, and every page object's override) turned out to be either a
+no-op or just resetting internal JS boolean flags (`patchMenuOpen`, `categoryMenuOpen`, etc.); **none of
+them trigger any redraw at all**. So dismissal isn't driven by `onRemoveMenu`. Tested the actual
+alternative directly: populate the popup (on `page_template=0`, as always), then send a **genuine
+template switch** to a real, different template (16, carried on an ordinary title-bar write) instead of
+replaying `clearMenu()`'s bytes. **Result: the popup vanished completely** -- the screen showed a clean,
+fresh, fully-default template 16 mixer view (generic numbered knobs, no custom text anywhere), with zero
+trace of the popup. This matches the already-established Thirteenth finding exactly: switching to a
+genuinely different real `page_template` clears per-template content, and the popup -- despite being
+"overlaid" while nominally on `page_template=0` -- turns out to be exactly this kind of per-template
+content, not chrome. The literal `clearMenu()` SysEx bytes alone (staying on `page_template=0`) do NOT
+clear it; a real template switch does.
+
+**Status, fully resolved**: populate, highlight, and dismiss are all now hardware-confirmed.
+- Populate: `06 00 08 <indexed entries>` -- confirmed, overlays cleanly on the current page.
+- Highlight: plain `CC 111 = <row>` -- confirmed, live-tracks the value.
+- Dismiss: NOT the literal `clearMenu()` bytes alone -- switch to any real, different `page_template`
+  (an ordinary compose write on that template, e.g. a title-bar write) and the popup clears as a normal
+  consequence of the template-switch content-clearing rule (Thirteenth finding), not a special
+  popup-specific mechanism.
+
+### Twenty-eighth finding: input CC handling — a persistent live listener, and 4 more physical controls confirmed
+
+Per "always have a live listener" -- started `panorama-bridge` (the `main.rs` binary, which already
+decodes incoming CC via `decode_cc`/`cc_kind`/`cc_name`) in the background persistently, rather than as
+a one-shot capture, so any physical interaction from here on gets logged without needing to remember to
+start something first.
+
+Traced the driver's own incoming-CC dispatch (`Z811481AF53E7994F1`, called from `onMidi` for every
+Control Change) to find write-sites for flags we'd only seen read before, then had physical buttons
+pressed on the real device while the listener ran, to confirm both directions at once:
+
+- **CC 96 = Shift**: source, `case CC.Z8103EE82A3F8314DF: Z8114DFD213E74EEB9=0<e` -- this is the
+  write-site for `Z8114DFD213E74EEB9`, the boolean flag that gates alternate Play/Stop/Record/Loop
+  behavior everywhere in the driver (see the deobfuscation doc). Resolves that open thread: it's
+  genuinely the physical Shift key, a momentary press/release CC (value 127 on press, 0 on release).
+- **CC 103 = Mode**: source, `case CC.Z8106041EB3F613A4B: 0<e?setActiveDisplayPage(internalPage)...`
+  -- plausibly tied to the "Internal mode" bypass from the Fifth finding, not yet cross-checked live.
+- **CC 107/108 = screen buttons 1/2** (the two of the four small buttons above the display we hadn't
+  identified yet), dispatched to whatever page object is currently active.
+- **CC 109 = screen button 3, "exit/esc"**: confirmed BOTH from source and live -- pressed physically
+  while the popup menu (Twenty-seventh finding) was still open, and the exact CC (109) matches
+  `case CC.Z81048047C3F79F700: ...if(menuHandler.isActive) menuHandler.onMenuCancel(); else ...
+  onScreenButton(3)` precisely.
+- **CC 110 = "menu enter"**: confirmed the same way, pressed right after -- matches
+  `case CC.Z8104967483F781F8A: if(menuHandler.isActive) menuHandler.onMenuEnter();` exactly.
+
+Updated `main.rs`'s `cc_name`/`cc_kind` with all of these (previously falling through to a bare
+`cc_N`/`Unknown`). `research/panorama-p1-driver-deobfuscation.md` updated with the confirmed identities.
+
+Next: a live, interactive full-controller mapping exercise -- physical interaction observed directly via
+the webcam feed, cross-referenced against the listener's CC log in real time, to build out the complete
+physical-control-to-CC map (not just the handful found through source so far).
 
 ## Debugging technique: USB webcam on the screen
 
