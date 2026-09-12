@@ -1,13 +1,19 @@
 # Nektar Panorama P1 — protocol notes
 
-> **Current status (read this first):** input (CC decoding) works and is done. Display **write bytes
-> are confirmed correct** against the official driver, sent on the correct ports, in three different
-> shapes, one-shot and repeated — **all with zero visible effect**. Every code-only hypothesis has been
-> tried and ruled out (see "Fourth finding" below for the full list). The single remaining, untried
-> lever is **physical**: check the P1's own `Setup` menu for a DAW/Bitwig mode selector and switch to
-> it. Nothing further should be attempted here on a bare "implement panorama p1 poc" prompt with no new
-> information — re-testing already-ruled-out hypotheses wastes a cycle. If woken with nothing new,
-> check the webcam frame for a change and hold if there isn't one.
+> **Current status (read this first): DISPLAY WRITE CONFIRMED WORKING.** Root cause found and fixed:
+> our `Internal`/`Instrument` port assignment was backwards all session (see "Fifth finding"). The
+> official Bitwig integration guide's Linux port-config table (`Output1: Instrument, Output2:
+> Internal`) revealed the correct mapping; once `msg_test.rs` was corrected to send the init sequence
+> and display write on the actually-correct ports, the device (a) replied to our init handshake for
+> the first time all session, and (b) rendered our literal text (`"HACPAD FIX"`) on its physical
+> screen, confirmed by webcam photo. Input (CC decoding) was already working. **Both directions of the
+> USB bridge are now confirmed live against real hardware.** The earlier "Internal mode" finding
+> (device's own native standalone UI, tab labels `Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup`
+> matching the old manual's documented Internal Mode exactly) was real and correctly identified, but
+> turned out not to be the actual blocker — the display write overwrote/replaced that screen directly
+> regardless of device mode once sent on the correct port. Next: build out a real page-composition
+> write (not just the one-shot "message" shortcut), and fold the corrected port mapping into
+> `main.rs`/the main bridge binary.
 
 Device confirmed connected: `Nektar Technology / PANORAMA P1`, USB VID:PID `2467:2025` (`/sys/bus/usb/devices/1-1/`).
 
@@ -335,22 +341,98 @@ only honors it once switched to a specific DAW profile via its own on-device `Se
 physical action — something only reachable by pressing the actual `Setup` button/encoder on the unit,
 not by anything we can do over MIDI). This has not been tried yet this session.
 
+**Update: this hypothesis was directionally right (a device-mode gate) but pointed at the wrong
+button.** See "Fifth finding" below for the actual mechanism, confirmed from the official guide.
+
+## Fifth finding: it's not a byte problem at all — the device is in "Internal" mode
+
+Per the user's prompt, went back to the driver sources with fresh eyes and cross-referenced against
+the *actual* official documentation (found and read this session, not previously located):
+
+- **`uint7ToHex`, `String.prototype.toHex`, `sendSysex`, `sendMidi`, `sendChannelController`,
+  `isNoteOn`, `isChannelController`** are called throughout all 3 driver files but defined in *none*
+  of them (confirmed with both `function name(...)` and `name = function(...)` search patterns, and by
+  confirming there is no fourth JS file anywhere in the official support package). These are genuine
+  Bitwig Controller API v1 globals (`loadAPI(1)`, declared at the top of all three `.control.js`
+  files) — legacy convenience helpers Bitwig's scripting sandbox provides directly, not
+  Nektar-specific code. This closes the loop on "maybe we're missing a shared utility file somewhere."
+- Grepped for any raw-USB/HID access path in case the real gate lives below MIDI entirely (`usb`,
+  `hid`, `vendor`, `endpoint`, `control transfer`, etc.) — the only hit was `sendRawMidiEvent`, a real
+  documented Bitwig `NoteInput` API method for note feedback, unrelated to USB. **There is no raw-USB
+  path anywhere in this driver** — everything genuinely goes through standard MIDI/SysEx.
+- Fetched Nektar's own **"Using Panorama P-Series with Bitwig Studio"** guide (bundled in the same
+  official support package as the driver — `Bitwig_Studio_Setup_&_User_Guide_for_Panorama_P-series.pdf`,
+  read directly via `pymupdf` since it wasn't OCR'd/text-searchable through a plain fetch). Page 10,
+  "Modes & Display":
+  > "Each of the Mode navigation buttons will configure Panorama to control different aspects of
+  > Bitwig Studio. It's like having four control surfaces in one: **Mixer** ... **Instrument** ...
+  > **Transport** ... **Internal**: Uses Panorama's internal MIDI controller functions so you can
+  > **jump out of our dedicated Bitwig Studio protocol** and use Panorama as a traditional MIDI
+  > controller."
+
+**This is the real answer.** The screen we've been photographing all session — `MIDI CC 63`, raw
+fader/encoder value readouts, tabs labeled `Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup` — is not a
+"standalone/no-DAW-detected" fallback UI at all. It's **Internal mode**, one of four physical
+mode states the hardware can be in *regardless of whether Bitwig is running and correctly
+connected*, entered via the physical `Mode` button, whose entire documented purpose is to bypass the
+DAW display protocol. No SysEx we send — correct or not, on any port, one-shot or repeated — was ever
+going to render while the device is deliberately in this mode. Every prior "still zero effect" result
+in this doc is fully consistent with that, not evidence against our bytes.
+
+The same page (page 6 of the guide, Linux setup instructions) also reveals a second, independent bug:
+the official manual port config table lists, for the Linux manual-add flow:
+```
+Output1: Panorama Instrument
+Output2: Panorama Internal
+```
+If Bitwig's Controller Settings UI numbers ports 1-based matching `getMidiOutPort(0)`/`getMidiOutPort(1)`,
+this means **our Internal/Instrument port assignment has been backwards all session**: the bare
+default `sendSysex()` (implicit port 0) is `Instrument`, and the one explicit
+`host.getMidiOutPort(1)` call (used for the Linux-only init message) is `Internal` — the reverse of
+what we assumed from the very first port-mapping test. This wasn't reachable by testing alone (the
+mode gate would have hidden its effect regardless of which port we used) but must be fixed before the
+next round of hardware testing.
+
+### Confirmed: the port fix alone was sufficient
+
+Fixed `msg_test.rs` to send the Linux-only init message on `Internal` and everything else (`INIT_1`,
+`INIT_2`, the message write, exit) on `Instrument` — the reverse of every prior test this session.
+Result, immediately, on the very first run:
+- The device **replied** to our init handshake for the first time all session:
+  `<< default IN: F0 00 01 77 7F 02 09 03 00 00 01 3E 33 F7` (an echo/ack of our `INIT_2`, on the
+  `Instrument` port) and again on exit. Zero replies had ever been seen on any port before this fix.
+- The device's screen **rendered our literal text**, `"HACPAD FIX"`, confirmed by webcam photo —
+  overwriting the native standalone UI directly, regardless of whatever Mode-button state the device
+  was already in. The physical Mode-button press the user tried earlier turned out not to be
+  necessary once the port was correct.
+
+This is the actual fix. Both directions of the bridge (CC input, confirmed earlier; display write,
+confirmed now) are working against real hardware.
+
 ## Next steps
 
-1. **Physically switch the device into its Bitwig/DAW-control mode via its own on-screen `Setup` menu**,
-   then re-run `msg_test` and re-check the webcam. This is the leading remaining hypothesis for why
-   byte-perfect SysEx traffic (correct ports, correct bytes, bidirectional connections, all confirmed)
-   is having zero effect, and it's the one thing left that requires a human at the hardware rather than
-   more code — every code-only hypothesis triable without either a live Bitwig session or this physical
-   step has now been tried and ruled out (see above).
-2. If step 1 changes nothing: real USB-level packet capture (usbmon/Wireshark) remains untried this
-   whole investigation — would show the literal bytes on the wire during a real Bitwig session,
-   sidestepping the need to fully trace the JS state machine by hand. This would also settle whether
-   Bitwig sends something else entirely before the display ever lights up that we haven't found by
-   reading the source (e.g. a non-SysEx trigger, or traffic from `pnx1.js`'s `DisplayPage` instances
-   we haven't traced through in full — `Z810A561E13F1C28DD`/`textEntry`/`Z810AA638B3F174CED` compose
-   path specifically, which we've read but never actually replayed against hardware since it needs
-   real per-field content we don't have without a live session).
+1. **Fold the corrected port mapping into `main.rs`** (the main `panorama-bridge` binary), which still
+   has the old backwards Internal/Instrument assignment from before this fix.
+2. Build a real full-page write (the `composeStart`/`textEntry`/flush compose path, not just the
+   one-shot "message" shortcut) using the corrected ports, now that we have a confirmed-working
+   baseline to build on.
+3. Investigate the device's reply bytes further (`7F 02` instead of the `7F 01` we sent, and the
+   checksum-like last byte shifting by 1) — may be worth understanding, though not blocking.
+
+## Sixth finding: multi-line text and a filled logo banner both confirmed
+
+Once the port fix landed, tested further directly on hardware:
+- **Embedded `\n` (0x0A) line breaks are honored** — a 3-line message rendered as 3 separate lines on
+  screen (not literally, e.g., dropped or shown as a control character).
+- **A full bordered ASCII logo banner** (7 lines: top/bottom `#` borders, blank padding lines, "HACPAD"
+  and "usb bridge" centered) rendered correctly and legibly, confirmed by webcam photo.
+- **Resending the same write on a timer causes a visible flicker for no benefit** — a single send
+  persists on screen fine (this was already known from the repeated-write hypothesis test earlier, but
+  is now confirmed as the right behavior going forward rather than a leftover test artifact).
+  `msg_test.rs` was changed from "resend every 200ms" back to "send once, hold" accordingly.
+- `main.rs` (the real `panorama-bridge` binary) was updated with the corrected port mapping and
+  smoke-tested end-to-end: init → write "hacpad bridge" → confirmed rendered on screen via webcam,
+  CC-input listener still running normally alongside it.
 
 ## Debugging technique: USB webcam on the screen
 

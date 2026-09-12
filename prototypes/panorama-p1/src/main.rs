@@ -7,12 +7,11 @@
 //!      (input) using the documented CC map. **Confirmed working** against
 //!      real hardware.
 //!   2. Write to the P1's own screen via vendor SysEx (output/feedback).
-//!      **Bytes confirmed correct** against the official Nektar driver
-//!      source and sent successfully to real hardware, but the device does
-//!      not currently render them -- see research/panorama-p1-protocol-notes.md
-//!      for the full investigation. Leading hypothesis: the device needs to
-//!      be switched into a DAW-control mode via its own on-device `Setup`
-//!      menu first (untested pending physical access to the unit).
+//!      **Confirmed working** against real hardware -- text (including
+//!      multi-line ASCII banners, `\n`-separated) renders correctly. The
+//!      missing piece for most of this investigation was the port mapping
+//!      (see PORT_DEFAULT/PORT_ONE below and research/panorama-p1-protocol-notes.md,
+//!      "Fifth finding"), not the message bytes, which were already correct.
 //!
 //! Protocol facts (SysEx structure, CC map, port mapping) are written up in
 //! research/panorama-p1-protocol-notes.md, cross-checked against Nektar's own
@@ -60,12 +59,16 @@ const CMD_WRITE_DISPLAY: u8 = 0x06;
 // NOT the 02 we originally guessed before finding the official driver.
 const MSG_PAGE_TEMPLATE: u8 = 0x01;
 
-/// Real ports the official driver uses (confirmed via ALSA sequencer port
-/// listing): the default output port (Bitwig's `sendSysex()` with no port
-/// arg) is "Internal"; the one explicit `host.getMidiOutPort(1)` call (used
-/// only for the Linux-only init message) is "Instrument".
-const PORT_INTERNAL: &str = "PANORAMA P1 Internal";
-const PORT_INSTRUMENT: &str = "PANORAMA P1 Instrument";
+/// Real ports the official driver uses -- CORRECTED per the official "Using
+/// Panorama P-Series with Bitwig Studio" guide's Linux port-config table
+/// ("Output1: Instrument, Output2: Internal"): the default output port
+/// (Bitwig's bare `sendSysex()`, no port arg) is "Instrument"; the one
+/// explicit `host.getMidiOutPort(1)` call (used only for the Linux-only init
+/// message) is "Internal". This is the REVERSE of what earlier testing this
+/// session assumed -- see research/panorama-p1-protocol-notes.md, "Fifth
+/// finding" -- and was the actual reason display writes weren't rendering.
+const PORT_DEFAULT: &str = "PANORAMA P1 Instrument";
+const PORT_ONE: &str = "PANORAMA P1 Internal";
 
 fn sysex(body: &[u8]) -> Vec<u8> {
     let mut msg = SYSEX_PREFIX.to_vec();
@@ -76,10 +79,8 @@ fn sysex(body: &[u8]) -> Vec<u8> {
 
 /// The "quick message" one-shot display write (`writeMessageToDisplay` in the
 /// real driver). Simpler than the full per-field page-composition path and
-/// doesn't need live DAW session state to construct -- but as of this
-/// writing, sending it produces no visible change on the device (see
-/// protocol notes: three independently-shaped SysEx messages all had zero
-/// effect, pointing at a device-mode gate rather than a byte-level error).
+/// doesn't need live DAW session state to construct. **Confirmed working**:
+/// renders on the real screen, including multi-line text via embedded `\n`.
 fn write_message(text: &str) -> Vec<u8> {
     let bytes = text.as_bytes();
     let mut body = vec![CMD_WRITE_DISPLAY, MSG_PAGE_TEMPLATE, 0x00, 0x00, bytes.len() as u8];
@@ -181,30 +182,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let text = env::args().skip(1).collect::<Vec<_>>().join(" ");
     let text = if text.is_empty() { "hacpad".to_string() } else { text };
 
-    let internal_out = MidiOutput::new("hacpad-p1-internal")?;
-    let internal_port = find_out_port(&internal_out, PORT_INTERNAL)?;
-    let mut internal = internal_out.connect(&internal_port, "hacpad-p1-internal-conn")?;
+    let default_out = MidiOutput::new("hacpad-p1-default")?;
+    let default_port = find_out_port(&default_out, PORT_DEFAULT)?;
+    let mut default_conn = default_out.connect(&default_port, "hacpad-p1-default-conn")?;
 
-    let instrument_out = MidiOutput::new("hacpad-p1-instrument")?;
-    let instrument_port = find_out_port(&instrument_out, PORT_INSTRUMENT)?;
-    let mut instrument = instrument_out.connect(&instrument_port, "hacpad-p1-instrument-conn")?;
+    let port1_out = MidiOutput::new("hacpad-p1-port1")?;
+    let port1_port = find_out_port(&port1_out, PORT_ONE)?;
+    let mut port1_conn = port1_out.connect(&port1_port, "hacpad-p1-port1-conn")?;
 
-    // Real driver also opens MIDI input on both ports; confirmed to make no
-    // difference to the display-write question, but this is the "connected
-    // like a real DAW" baseline going forward, and it's how CC input arrives.
+    // Real driver also opens MIDI input on both ports; CC input in practice
+    // arrives on the "Instrument"/default port.
     let input = MidiInput::new("hacpad-p1-input")?;
-    let input_port = find_in_port(&input, PORT_INTERNAL)?;
+    let input_port = find_in_port(&input, PORT_DEFAULT)?;
 
     println!("Sending init sequence...");
-    instrument.send(&sysex(&INIT_LINUX_ONLY))?;
+    port1_conn.send(&sysex(&INIT_LINUX_ONLY))?;
     std::thread::sleep(Duration::from_millis(50));
-    internal.send(&sysex(&INIT_1))?;
+    default_conn.send(&sysex(&INIT_1))?;
     std::thread::sleep(Duration::from_millis(50));
-    internal.send(&sysex(&INIT_2))?;
+    default_conn.send(&sysex(&INIT_2))?;
     std::thread::sleep(Duration::from_millis(200));
 
-    println!("Attempting screen message: {text:?} (protocol confirmed correct; device rendering still blocked, see protocol notes)");
-    internal.send(&write_message(&text))?;
+    println!("Writing screen message: {text:?}");
+    default_conn.send(&write_message(&text))?;
 
     println!("Listening for CC input (Ctrl-C to stop)...");
     let _in_conn = input.connect(

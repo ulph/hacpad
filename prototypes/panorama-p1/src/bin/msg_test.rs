@@ -2,14 +2,25 @@
 //! write, confirmed from the official PANORAMA_P1.control.js
 //! (nektarinit / nektarexit / OutputState.prototype.send / writeMessageToDisplay).
 //!
-//! Port mapping (confirmed via ALSA sequencer port listing):
-//!   "PANORAMA P1 Internal"   == Bitwig default port (port 0)
-//!   "PANORAMA P1 Instrument" == Bitwig host.getMidiOutPort(1)
+//! Port mapping -- CORRECTED per the official "Using Panorama P-Series with
+//! Bitwig Studio" guide's Linux manual-add instructions (port config table,
+//! page 6): "Output1: Instrument, Output2: Internal". Bitwig's Controller
+//! Settings UI numbers ports 1-based matching getMidiOutPort(0)/(1), so:
+//!   "PANORAMA P1 Instrument" == Bitwig DEFAULT port (port 0, bare sendSysex())
+//!   "PANORAMA P1 Internal"   == Bitwig host.getMidiOutPort(1)
+//! This is the REVERSE of what we assumed all last session (we had these two
+//! swapped) -- see research/panorama-p1-protocol-notes.md, "Fifth finding".
+//!
+//! IMPORTANT: per that same finding, none of this matters while the device is
+//! physically in **Internal mode** (one of its four Mode-button states) --
+//! that mode explicitly bypasses the whole DAW display protocol by design.
+//! Leave Internal mode (press the physical Mode button) before expecting any
+//! effect from this test at all.
 //!
 //! Real init sequence (from nektarinit()):
-//!   1. (Linux only) on Instrument port: F0 00 01 77 7F 01 08 01 00 00 01 01 75 F7
-//!   2. on Internal port:                F0 00 01 77 7F 01 08 02 00 00 01 01 73 F7
-//!   3. on Internal port:                F0 00 01 77 7F 01 09 03 00 00 01 3E 34 F7
+//!   1. (Linux only) on host.getMidiOutPort(1) ("Internal"): F0 00 01 77 7F 01 08 01 00 00 01 01 75 F7
+//!   2. on the default port ("Instrument"):                 F0 00 01 77 7F 01 08 02 00 00 01 01 73 F7
+//!   3. on the default port ("Instrument"):                 F0 00 01 77 7F 01 09 03 00 00 01 3E 34 F7
 //!      (SURFACE.Connected branch, since the "is P1 mk2 / nektarine" flag is false)
 //!
 //! "Quick message" write (writeMessageToDisplay, pageTemplate constant == 1):
@@ -31,6 +42,9 @@ const EXIT_2: [u8; 7] = [0x08, 0x02, 0x00, 0x00, 0x01, 0x00, 0x74];
 
 const CMD_WRITE_DISPLAY: u8 = 0x06;
 const MSG_PAGE_TEMPLATE: u8 = 0x01;
+
+const PORT_DEFAULT: &str = "PANORAMA P1 Instrument"; // Bitwig's implicit port 0
+const PORT_ONE: &str = "PANORAMA P1 Internal"; // Bitwig's host.getMidiOutPort(1)
 
 fn sysex(body: &[u8]) -> Vec<u8> {
     let mut msg = PREFIX.to_vec();
@@ -83,42 +97,41 @@ fn main() -> Result<(), Box<dyn Error>> {
     let text = args.join(" ");
     let text = if text.is_empty() { "HACPAD".to_string() } else { text };
 
-    let internal_out = MidiOutput::new("hacpad-internal")?;
-    let internal_port = find_port(&internal_out, "PANORAMA P1 Internal")?;
-    let mut internal = internal_out.connect(&internal_port, "hacpad-internal-conn")?;
+    let default_out = MidiOutput::new("hacpad-default")?;
+    let default_port = find_port(&default_out, PORT_DEFAULT)?;
+    let mut default_conn = default_out.connect(&default_port, "hacpad-default-conn")?;
 
-    let instrument_out = MidiOutput::new("hacpad-instrument")?;
-    let instrument_port = find_port(&instrument_out, "PANORAMA P1 Instrument")?;
-    let mut instrument = instrument_out.connect(&instrument_port, "hacpad-instrument-conn")?;
+    let port1_out = MidiOutput::new("hacpad-port1")?;
+    let port1_port = find_port(&port1_out, PORT_ONE)?;
+    let mut port1_conn = port1_out.connect(&port1_port, "hacpad-port1-conn")?;
 
     // The real driver's nektarinit() also opens MIDI INPUT connections on both
-    // ports (host.getMidiInPort(0)/(1).setMidiCallback(...)). We've never done
-    // this before -- test whether the device gates its behavior on seeing a
-    // live input subscription, i.e. "is a computer actually listening back".
-    let internal_in = MidiInput::new("hacpad-internal-in")?;
-    let internal_in_port = find_in_port(&internal_in, "PANORAMA P1 Internal")?;
-    let _internal_in_conn = internal_in.connect(
-        &internal_in_port,
-        "hacpad-internal-in-conn",
-        |_stamp, msg, _| println!("<< Internal IN: {msg:02X?}"),
+    // ports (host.getMidiInPort(0)/(1).setMidiCallback(...)). Kept for parity,
+    // even though it was already confirmed to make no difference on its own.
+    let default_in = MidiInput::new("hacpad-default-in")?;
+    let default_in_port = find_in_port(&default_in, PORT_DEFAULT)?;
+    let _default_in_conn = default_in.connect(
+        &default_in_port,
+        "hacpad-default-in-conn",
+        |_stamp, msg, _| println!("<< default IN: {msg:02X?}"),
         (),
     )?;
 
-    let instrument_in = MidiInput::new("hacpad-instrument-in")?;
-    let instrument_in_port = find_in_port(&instrument_in, "PANORAMA P1 Instrument")?;
-    let _instrument_in_conn = instrument_in.connect(
-        &instrument_in_port,
-        "hacpad-instrument-in-conn",
-        |_stamp, msg, _| println!("<< Instrument IN: {msg:02X?}"),
+    let port1_in = MidiInput::new("hacpad-port1-in")?;
+    let port1_in_port = find_in_port(&port1_in, PORT_ONE)?;
+    let _port1_in_conn = port1_in.connect(
+        &port1_in_port,
+        "hacpad-port1-in-conn",
+        |_stamp, msg, _| println!("<< port1 IN: {msg:02X?}"),
         (),
     )?;
 
-    println!("Sending real init sequence (with input ports also open)...");
-    instrument.send(&sysex(&INIT_LINUX_ONLY))?;
+    println!("Sending real init sequence (corrected port mapping, input ports also open)...");
+    port1_conn.send(&sysex(&INIT_LINUX_ONLY))?;
     sleep(Duration::from_millis(50));
-    internal.send(&sysex(&INIT_1))?;
+    default_conn.send(&sysex(&INIT_1))?;
     sleep(Duration::from_millis(50));
-    internal.send(&sysex(&INIT_2))?;
+    default_conn.send(&sysex(&INIT_2))?;
     sleep(Duration::from_millis(200));
 
     let msg = match &raw_override {
@@ -137,21 +150,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     println!();
 
-    // Real Bitwig never sends a display write once -- flush() re-runs
-    // OutputState.send() continuously (every parameter tick, transport
-    // change, etc.), so the device may expect a refreshed/repeated write
-    // rather than a single one-shot message. Test that: resend every 200ms
-    // for the whole hold, instead of sending once and going quiet.
-    println!("Resending every 200ms for 8s so we can photograph the screen...");
-    for _ in 0..40 {
-        internal.send(&msg)?;
-        sleep(Duration::from_millis(200));
-    }
+    // A single send is sufficient and persists on screen (confirmed once the
+    // port mapping was fixed) -- resending on a timer was only ever a test
+    // for the "does it need a refreshed write" hypothesis (disproved), and
+    // just causes a visible redraw flicker for no benefit. Send once, hold
+    // quietly.
+    default_conn.send(&msg)?;
+    println!("Holding for 8s so we can photograph the screen...");
+    sleep(Duration::from_secs(8));
 
     println!("Sending exit sequence...");
-    internal.send(&sysex(&EXIT_1))?;
+    default_conn.send(&sysex(&EXIT_1))?;
     sleep(Duration::from_millis(50));
-    internal.send(&sysex(&EXIT_2))?;
+    default_conn.send(&sysex(&EXIT_2))?;
 
     Ok(())
 }
