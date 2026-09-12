@@ -1,30 +1,42 @@
 # Nektar Panorama P1 — protocol notes
 
-> **Current status (read this first): DISPLAY WRITE CONFIRMED WORKING.** Root cause found and fixed:
-> our `Internal`/`Instrument` port assignment was backwards all session (see "Fifth finding"). The
-> official Bitwig integration guide's Linux port-config table (`Output1: Instrument, Output2:
-> Internal`) revealed the correct mapping; once `msg_test.rs` was corrected to send the init sequence
-> and display write on the actually-correct ports, the device (a) replied to our init handshake for
-> the first time all session, and (b) rendered our literal text (`"HACPAD FIX"`) on its physical
-> screen, confirmed by webcam photo. Input (CC decoding) was already working. **Both directions of the
-> USB bridge are now confirmed live against real hardware.** The earlier "Internal mode" finding
-> (device's own native standalone UI, tab labels `Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup`
-> matching the old manual's documented Internal Mode exactly) was real and correctly identified, but
-> turned out not to be the actual blocker — the display write overwrote/replaced that screen directly
-> regardless of device mode once sent on the correct port. `main.rs` (the real `panorama-bridge`
-> binary) has the corrected port mapping and is smoke-tested end-to-end (init → screen write → CC
-> input listen). Multi-line text (`\n`-separated) and a full bordered ASCII logo banner are also
-> confirmed rendering correctly — see "Sixth finding". See `prototypes/panorama-p1/README.md` for
-> how to run it.
+> **Current status (read this first): BOTH DIRECTIONS CONFIRMED WORKING, FULL PAGE-TEMPLATE MAP DONE.**
 >
-> **Correction (important):** the "Seventh finding" below, claiming the message write is a
-> "column-major rotated character grid" needing transposed ASCII art, **was wrong** — it was an
-> artifact of the debugging webcam being mounted 90° off from the device without that being accounted
-> for. Corrected: it's an ordinary top-to-bottom, left-to-right multi-line text box, nothing rotated or
-> transposed. See the correction under "Seventh finding" for how this was caught, and "Ninth finding"
-> for how real plugin-parameter text (names/values from Bitwig's API) actually flows into the screen
-> via a *separate*, structurally different general per-field compose write — the still-open item for a
-> future session, not yet tried with real content.
+> - **Input** (CC decoding) and **output** (screen writes) are both confirmed live against real
+>   hardware. The original blocker was an inverted `Internal`/`Instrument` port assignment — see
+>   "Fifth finding" — not a byte-level protocol error. `main.rs` (the real `panorama-bridge` binary)
+>   has the fix and is smoke-tested end-to-end. See `prototypes/panorama-p1/README.md` to run it.
+> - **All 13 page-template values** (`0`-`5`, `16`-`22`) have been probed directly on hardware with a
+>   title-bar write plus an 8-entry name-field write each — see "Tenth finding" for templates 2/16/17
+>   and the "Summary" table (in the Tenth finding, after template 0) for the complete map. Each real
+>   template (2-22) shows a *different widget* (knobs, faders — split or one row —, a 4×4 pad grid, or
+>   a bulleted list) but **the same two content fields behave identically across all of them**: the
+>   3-segment title bar (`displayId 1`) and the up-to-8-slot name field (`displayId 6`). Template `0`
+>   is confirmed as a genuine "reset" sentinel, not a real page. Template `1` is the simpler
+>   one-shot message overlay used throughout most of this investigation (plain multi-line text box —
+>   see the correction below).
+> - The big-font single-line readout seen in every native screenshot (`MIDI CC N`) is a real, writable
+>   field — `displayId 2` — confirmed with our own text ("Twelfth finding"). Its real semantic role is
+>   "name of whatever was just touched", not a permanent slot, per the user's correction.
+> - **What must match the Bitwig driver exactly vs. what's just its own software choice** is written up
+>   as the "Eleventh finding" — short version: match the wire protocol (prefixes, command bytes,
+>   template/displayId IDs, message shapes, the ~127-byte length ceiling) precisely; everything else
+>   (what text, when to send it, which page to show when) is free design space for hacpad's own
+>   implementation. Ordinary page navigation is local/button-driven, not DAW-orchestrated (same finding).
+> - A pure client-side **screen simulator** (`tooling/webcam-viewer/simulator.html`, served at
+>   `/simulator.html`) mocks up all the widget layouts found above, for previewing a planned write
+>   before spending a hardware round-trip on it.
+> - **Still open**: `displayId` values `0`, `3`, `8` untested; `faderElementValue`'s index-9-17 range
+>   (shares `displayId 7` with `ctrlElementValue`) untested; whether the firmware needs periodic
+>   traffic as a keepalive over a long session is unknown; a real Bitwig ground-truth capture (scripts
+>   prepared in `prototypes/panorama-p1/sniff_bitwig.py` / `aconnect_fallback.py`, meant to be run
+>   outside this sandbox) has not yet happened.
+>
+> **Correction (important, kept for the record):** the "Seventh finding" below, claiming the message
+> write is a "column-major rotated character grid" needing transposed ASCII art, **was wrong** — it was
+> an artifact of the debugging webcam being mounted 90° off from the device, not accounted for at the
+> time. Corrected: it's an ordinary top-to-bottom, left-to-right multi-line text box, nothing rotated or
+> transposed. See the correction under "Seventh finding" for how this was caught.
 
 Device confirmed connected: `Nektar Technology / PANORAMA P1`, USB VID:PID `2467:2025` (`/sys/bus/usb/devices/1-1/`).
 
