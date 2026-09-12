@@ -19,7 +19,7 @@ use std::error::Error;
 use std::thread::sleep;
 use std::time::Duration;
 
-use midir::{MidiOutput, MidiOutputPort};
+use midir::{MidiInput, MidiInputPort, MidiOutput, MidiOutputPort};
 
 const PREFIX: [u8; 6] = [0xF0, 0x00, 0x01, 0x77, 0x7F, 0x01];
 
@@ -54,8 +54,33 @@ fn find_port(out: &MidiOutput, needle: &str) -> Result<MidiOutputPort, Box<dyn E
         .ok_or_else(|| format!("no MIDI output port matching {needle:?}").into())
 }
 
+fn find_in_port(inp: &MidiInput, needle: &str) -> Result<MidiInputPort, Box<dyn Error>> {
+    inp.ports()
+        .into_iter()
+        .find(|p| inp.port_name(p).map(|n| n.contains(needle)).unwrap_or(false))
+        .ok_or_else(|| format!("no MIDI input port matching {needle:?}").into())
+}
+
+/// Parse a space-separated hex-byte string like "F0 00 01 77 ... F7" into raw bytes.
+fn parse_hex(s: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    s.split_whitespace()
+        .map(|tok| u8::from_str_radix(tok, 16).map_err(|e| e.into()))
+        .collect()
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let text = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // `msg_test --raw "F0 00 ... F7"` sends a literal hex-byte SysEx message
+    // (after the same init sequence) instead of building a "quick message" write.
+    // Used to replay known example messages verbatim.
+    let raw_override: Option<Vec<u8>> = if args.first().map(|s| s.as_str()) == Some("--raw") {
+        Some(parse_hex(&args[1..].join(" "))?)
+    } else {
+        None
+    };
+
+    let text = args.join(" ");
     let text = if text.is_empty() { "HACPAD".to_string() } else { text };
 
     let internal_out = MidiOutput::new("hacpad-internal")?;
@@ -66,7 +91,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let instrument_port = find_port(&instrument_out, "PANORAMA P1 Instrument")?;
     let mut instrument = instrument_out.connect(&instrument_port, "hacpad-instrument-conn")?;
 
-    println!("Sending real init sequence...");
+    // The real driver's nektarinit() also opens MIDI INPUT connections on both
+    // ports (host.getMidiInPort(0)/(1).setMidiCallback(...)). We've never done
+    // this before -- test whether the device gates its behavior on seeing a
+    // live input subscription, i.e. "is a computer actually listening back".
+    let internal_in = MidiInput::new("hacpad-internal-in")?;
+    let internal_in_port = find_in_port(&internal_in, "PANORAMA P1 Internal")?;
+    let _internal_in_conn = internal_in.connect(
+        &internal_in_port,
+        "hacpad-internal-in-conn",
+        |_stamp, msg, _| println!("<< Internal IN: {msg:02X?}"),
+        (),
+    )?;
+
+    let instrument_in = MidiInput::new("hacpad-instrument-in")?;
+    let instrument_in_port = find_in_port(&instrument_in, "PANORAMA P1 Instrument")?;
+    let _instrument_in_conn = instrument_in.connect(
+        &instrument_in_port,
+        "hacpad-instrument-in-conn",
+        |_stamp, msg, _| println!("<< Instrument IN: {msg:02X?}"),
+        (),
+    )?;
+
+    println!("Sending real init sequence (with input ports also open)...");
     instrument.send(&sysex(&INIT_LINUX_ONLY))?;
     sleep(Duration::from_millis(50));
     internal.send(&sysex(&INIT_1))?;
@@ -74,8 +121,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     internal.send(&sysex(&INIT_2))?;
     sleep(Duration::from_millis(200));
 
-    println!("Sending quick message: {text:?}");
-    let msg = write_message(&text);
+    let msg = match &raw_override {
+        Some(raw) => {
+            println!("Sending raw override message ({} bytes)", raw.len());
+            raw.clone()
+        }
+        None => {
+            println!("Sending quick message: {text:?}");
+            write_message(&text)
+        }
+    };
     print!("bytes:");
     for b in &msg {
         print!(" {b:02X}");

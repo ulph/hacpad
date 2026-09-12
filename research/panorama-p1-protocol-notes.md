@@ -260,6 +260,42 @@ SysEx traffic.
 This rules out "we had the wrong bytes" as the explanation — the bytes now match the official driver
 exactly, sent on the confirmed-correct ports, and still nothing happens.
 
+### Two more hypotheses tested and ruled out
+
+- **`setPageTemplate()` is dead code for this model.** Grepped all three files for
+  `setPageTemplate(` call sites with any argument: the *only* match in 8,571 combined lines is the
+  function's own definition (`PANORAMA_P1.control.js:50`). It is never called anywhere. Its real body,
+  found for completeness:
+  ```js
+  function setPageTemplate(a){
+    var b = "F0 00 01 77 7F 01 06 " + uint7ToHex(a) + "F7";   // just prefix + 06 + layout + F7
+    Z81136C4863E8BC4AF(b);
+    previousTemplate = lastPageTemplate; lastPageTemplate = a;
+  }
+  ```
+  Neither branch of `OutputState.prototype.send()` calls it either — the message path calls
+  `writeMessageToDisplay` directly, and the full page path builds its own `06 <layout> <displayId>`
+  header inline via `Z810A561E13F1C28DD` (composeStart), never through this function. So the "layout
+  mode must be separately latched via SysEx first" theory is wrong — ruled out, not just untested.
+
+- **Bidirectional MIDI (opening input, not just output) makes no difference.** The real
+  `nektarinit()` also opens MIDI **input** connections (`getMidiInPort(0)/(1).setMidiCallback(...)`),
+  which our test had never done — only output had ever been opened. Extended `msg_test.rs` to open
+  live input connections on both `Internal` and `Instrument` (logging anything received), re-ran the
+  full init + message-write sequence with those connections held open throughout, re-photographed
+  mid-hold. **No change** — same native standalone screen, and the device sent nothing back on either
+  input port during the whole run. Ruled out.
+
+- **It isn't specific to the "quick message" shape either.** Added a `--raw <hex>` mode to
+  `msg_test.rs` and replayed, verbatim, the community reimplementation's second full example message
+  from earlier in this doc (layout `02`, the full compose form spelling out "Browser"/"Preset"/
+  "Remote"/"Pages") after the same real init sequence. **Also zero effect.** Three structurally
+  different message shapes (our real-driver message-path bytes, a raw replay of someone else's
+  captured-working compose-form bytes, and the init/exit lifecycle bytes themselves) now all
+  triangulate on the same conclusion: **the device is not rendering any vendor SysEx we send it at
+  all right now**, independent of exact byte content — strongly consistent with it simply not being in
+  a state where it listens to display writes yet, rather than any remaining byte-level mistake.
+
 ### Working hypothesis: the device needs to be switched into a DAW-control mode first
 
 The screen we keep photographing is labeled with its own `Setup` tab — this looks like the P1's
@@ -274,16 +310,19 @@ not by anything we can do over MIDI). This has not been tried yet this session.
 ## Next steps
 
 1. **Physically switch the device into its Bitwig/DAW-control mode via its own on-screen `Setup` menu**,
-   then re-run `msg_test` and re-check the webcam. This is the leading hypothesis for why byte-perfect
-   SysEx traffic is having zero effect, and it's the one thing that requires a human at the hardware
-   rather than more code.
-2. If step 1 changes nothing: search `pnx1.js`/`pnx2.js` (8226 + 837 lines) for `setPageTemplate(` call
-   sites with a literal argument, and for a concrete, simple `updateOutputState()` implementation, in
-   case the full per-field page-composition path (not the message shortcut) turns out to be required
-   regardless of device mode.
-3. If still inconclusive: real USB-level packet capture (usbmon/Wireshark) remains untried this whole
-   investigation — would show the literal bytes on the wire during a real Bitwig session, sidestepping
-   the need to fully trace the JS state machine by hand.
+   then re-run `msg_test` and re-check the webcam. This is the leading remaining hypothesis for why
+   byte-perfect SysEx traffic (correct ports, correct bytes, bidirectional connections, all confirmed)
+   is having zero effect, and it's the one thing left that requires a human at the hardware rather than
+   more code — every code-only hypothesis triable without either a live Bitwig session or this physical
+   step has now been tried and ruled out (see above).
+2. If step 1 changes nothing: real USB-level packet capture (usbmon/Wireshark) remains untried this
+   whole investigation — would show the literal bytes on the wire during a real Bitwig session,
+   sidestepping the need to fully trace the JS state machine by hand. This would also settle whether
+   Bitwig sends something else entirely before the display ever lights up that we haven't found by
+   reading the source (e.g. a non-SysEx trigger, or traffic from `pnx1.js`'s `DisplayPage` instances
+   we haven't traced through in full — `Z810A561E13F1C28DD`/`textEntry`/`Z810AA638B3F174CED` compose
+   path specifically, which we've read but never actually replayed against hardware since it needs
+   real per-field content we don't have without a live session).
 
 ## Debugging technique: USB webcam on the screen
 
