@@ -296,6 +296,19 @@ exactly, sent on the confirmed-correct ports, and still nothing happens.
   all right now**, independent of exact byte content — strongly consistent with it simply not being in
   a state where it listens to display writes yet, rather than any remaining byte-level mistake.
 
+### Command-byte space enumerated — no missing handshake found
+
+Grepped all three files for every distinct byte following the `F0 00 01 77 7F 01` prefix in a literal
+SysEx string, to check for an unsent "enable"/"handshake" command we might be missing: only **`06`**
+(display write), **`08`**/**`09`** (mode/connection state — both already covered by our init/exit
+sequence), and one new one, **`0B`**. Read all of `0B`'s call sites: they cluster entirely around
+browser/patch-menu open/close logic (`gBrowserOpen`, `application.focusPanelAbove()`, menu
+highlight indices), and one payload spells literal ASCII `"Launcher"`
+(`0B 00 0F 00 08 4C 61 75 6E 63 68 65 72 00 01 02 0F 00 F7`). This looks like an LED/indicator-ring
+control (most likely the jog-wheel or a browser-mode indicator light), unrelated to the text display.
+No additional handshake/enable command exists in the shipped protocol — the command space really is
+just these four bytes, and we've already sent every one relevant to display state.
+
 ### Working hypothesis: the device needs to be switched into a DAW-control mode first
 
 The screen we keep photographing is labeled with its own `Setup` tab — this looks like the P1's
