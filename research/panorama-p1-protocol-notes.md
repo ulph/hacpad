@@ -1644,6 +1644,61 @@ only in the shared/client-facing JSON as demo content to explicitly try), so the
 stays clean. Not yet isolated further (e.g. whether message mode ever clears the popup under any
 ordering) -- open follow-up if it matters later.
 
+### Thirty-second finding: verifying "do fields need to match the template" via the simulator + webcam, three-way (state / simulator / device)
+
+Directly asked: does the template drawing a set of fields mean those fields must actually be supplied?
+Verified with a scripted WebSocket client acting as a raw simulator client (bypassing index.html's
+"helpful" auto-resupply-on-switch behavior added earlier), cross-checked against the real screen via
+the webcam at every step. Sequence, each isolated:
+
+1. **`{"layout":"pads16"}` alone, no other field** -- **zero visible effect**. The screen kept showing
+   the *previous* template's content completely unchanged. This is the key mechanism fact: **a
+   `page_template` switch is not a standalone operation** -- there is no message that "just" changes the
+   template. The template id is only ever a byte embedded inside some other field's compose write
+   (`write_title_bar(template, ...)`, `write_names(template, ...)`, etc. all take the template as a
+   parameter baked into the SysEx body). Sending a layout choice with no accompanying field write
+   transmits nothing at all. This is exactly why index.html's `layoutChanged` handler always piggybacks
+   a `titleBar` write on a template switch -- confirmed that design is necessary, not just a convenience.
+2. **`{"layout":"pads16","titleBar":[...]}`** (same title bar content as before) -- the template
+   genuinely switched (screen now shows the empty 4x4 pad grid, rows D/C/B/A), confirming the title-bar
+   write is what actually carries the template id onto the wire. The pads rendered **completely
+   blank/unlabeled** even though `names` was never touched by this message -- confirms per-template
+   content (displayId 6) really is cleared by the switch itself, not by an explicit blanking write
+   ("Fourteenth finding", now re-confirmed end-to-end through the simulator rather than just from source).
+   Meanwhile `bigfont`/`currentValue` ("CHROMEBIG"/"CHROMEVAL", set once at the very start and never
+   touched again for the rest of this whole test) were still showing, unchanged -- chrome persistence
+   confirmed without ever being resent, not just "survives a resend of the same value."
+3. **Supplied `names` matching pads16's 16 slots** (`P1`..`P16`) -- all 16 pads populated correctly, and
+   the row/index mapping matched our mockup's assumption exactly: row D = indices 12-15 (P13-P16), row
+   C = 8-11 (P9-P12), row B = 4-7 (P5-P8), row A = 0-3 (P1-P4). Direct confirmation the simulator's
+   `(nrows-1-r)*4+c` mapping is correct, not just plausible.
+4. **Supplied `values` (16 slots) on pads16** -- no new visible text anywhere (matches the documented
+   assumption that `ctrl_element_value` has no rendering slot on the pad-grid widget).
+
+**Answer to the original question**: yes -- but more precisely than "matching content, for cosmetics":
+the template switch itself is *carried by* whichever field write you send alongside it, and per-template
+content fields (names, and by extension values/pad_state/page_labels) get silently cleared by any real
+template change regardless of what that switch message touches, so they must be *resupplied* after a
+switch if you want them to keep showing -- not because the field values need to "match" the new template
+semantically, but because the device wipes them as a side effect of any genuine template switch. Chrome
+fields (title_bar/big_font/current_value/menu_button) need no such resupply.
+
+**Two incidental corrections found via the same cross-reference**, both now fixed in index.html:
+- **Title bar coloring**: confirmed (well-lit, close-framed photo) as **`[red, blue, red]`** for the
+  3 segments -- our mockup had assumed only the rightmost segment was ever highlighted (red) and the
+  other two plain/dark. Fixed the mockup's CSS/JS to the confirmed pattern.
+- **Pad-grid row shading**: the real widget renders a **vertical brightness gradient**, darkest at the
+  top row (D) fading to lightest at the bottom row (A) -- unrelated to any of our field content (initially
+  mistaken, mid-test, for a `values`-write side effect; ruled out by resending `names` alone and seeing
+  the same gradient persist). Purely a rendering fact of the pad widget itself. Added an approximating
+  gradient to the mockup's pad cells (previously a flat color for every row).
+
+Methodology note: this whole exercise deliberately used three distinct reference points -- the service's
+shared JSON *state*, the *simulator*'s deterministic rendering of that state (reasoned about directly,
+since no headless browser was available to actually screenshot the page), and the *real device* via the
+webcam -- catching two mockup inaccuracies that would otherwise have silently drifted from hardware
+truth.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
