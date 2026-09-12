@@ -11,9 +11,12 @@
 > (device's own native standalone UI, tab labels `Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup`
 > matching the old manual's documented Internal Mode exactly) was real and correctly identified, but
 > turned out not to be the actual blocker — the display write overwrote/replaced that screen directly
-> regardless of device mode once sent on the correct port. Next: build out a real page-composition
-> write (not just the one-shot "message" shortcut), and fold the corrected port mapping into
-> `main.rs`/the main bridge binary.
+> regardless of device mode once sent on the correct port. `main.rs` (the real `panorama-bridge`
+> binary) has the corrected port mapping and is smoke-tested end-to-end (init → screen write → CC
+> input listen). Multi-line text (`\n`-separated) and a full bordered ASCII logo banner are also
+> confirmed rendering correctly — see "Sixth finding". See `prototypes/panorama-p1/README.md` for
+> how to run it. Remaining open item: a real per-field page-composition write (not just the one-shot
+> "message" shortcut) — see "Next steps".
 
 Device confirmed connected: `Nektar Technology / PANORAMA P1`, USB VID:PID `2467:2025` (`/sys/bus/usb/devices/1-1/`).
 
