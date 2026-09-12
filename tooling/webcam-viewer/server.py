@@ -118,6 +118,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(LOGO_PNG, "image/png")
         elif self.path == "/logo.txt":
             self._serve_logo_txt()
+        elif self.path == "/simulator.html" or self.path == "/simulator":
+            self._serve_file(os.path.join(HERE, "simulator.html"), "text/html; charset=utf-8")
         else:
             self.send_response(404)
             self.end_headers()
