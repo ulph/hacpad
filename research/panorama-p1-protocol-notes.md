@@ -1175,6 +1175,33 @@ different steps share undisturbed state.
 range-narrowing, or any "vary one thing, hold the rest" protocol) unless every step starts from an
 explicitly-cleared, verified-blank state. A fresh process is not a fresh screen.
 
+### Twentieth finding: command byte 0x06 appears to be the only display-write command in the low range (negative result)
+
+Item 3 of the ongoing checklist: only `0x06` (display write) has ever been used deliberately; `0x08`/`0x09`
+(lifecycle) and `0x0B` (LED, from much earlier this session) are the only other confirmed command bytes.
+Probed the rest of the low range directly: for each of `0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x07, 0x0A,
+0x0C, 0x0D, 0x0E, 0x0F`, sent a blank (reset, via the confirmed `0x06`) then a test message shaped exactly
+like a normal display write but with that byte substituted for the command byte (`<cmd> <template=16>
+<displayId=1> <index=1> <len> "Cn"`), each in its own fresh process, exit code and stderr checked.
+
+**Result: no candidate produced any new visible text anywhere on screen.** No `"C0"` through `"C15"`
+label ever appeared; the screen only ever showed pre-existing stale content (from far earlier in the
+session) or the device's own native readouts. All 12 processes exited cleanly (`returncode=0`, no error)
+— these bytes are transmittable and don't crash anything, they just don't do a display write. Confirms
+(does not newly discover) that `0x06` is the display-write command; no evidence of another one in this
+range.
+
+**A real confound worth flagging**: during this probe, the big-font readout visibly changed on its own
+(`MIDI CC 3` → `MIDI CC 40`) and a burst of real Control Change input arrived (`B0 61 00` / `B0 61 7F` /
+`B0 61 00`, i.e. CC 97) — neither of these was caused by anything sent. The Panorama P1 sits physically on
+the desk during all of this testing, live and connected; its own knobs/encoders can be nudged (by hand,
+vibration, or just resting near vibrating/moving hardware) at any time, and per the Twelfth finding, the
+big-font field is genuinely wired to reflect "whatever was last physically touched" — so a real touch
+during a test will legitimately change what's on screen, with no SysEx involved at all. Any future test
+that includes physical-interaction as a signal (item 9 of the checklist) needs to control for this by
+capturing a `known-quiet` baseline immediately before deliberately touching a control, since ambient
+interaction can and does produce CC traffic and screen changes at any moment.
+
 ## Debugging technique: USB webcam on the screen
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
