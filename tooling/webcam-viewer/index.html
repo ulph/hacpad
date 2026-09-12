@@ -4,12 +4,33 @@
 <meta charset="utf-8">
 <title>Panorama P1 debug view</title>
 <style>
-  html, body { margin: 0; background: #111; }
+  html, body { margin: 0; background: #111; color: #ddd; font-family: monospace; }
   #feed { display: block; max-width: 100vw; }
+  #refs { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; padding: 8px; }
+  #refs figure { margin: 0; }
+  #refs figcaption { font-size: 12px; color: #888; margin-top: 4px; }
+  #logo-img { max-width: 300px; background: #fff; display: block; }
+  #logo-ascii { font-size: 10px; line-height: 1.05; white-space: pre; margin: 0; background: #000; padding: 6px; border: 1px solid #333; }
 </style>
 </head>
 <body>
 <img id="feed" src="/stream.mjpg">
+<div id="refs">
+  <figure>
+    <img id="logo-img" src="/logo.png">
+    <figcaption>assets/logo.png (source)</figcaption>
+  </figure>
+  <figure>
+    <pre id="logo-ascii">(loading logo.txt...)</pre>
+    <figcaption>assets/logo_*.txt (ASCII conversion, human-readable row-major)</figcaption>
+  </figure>
+</div>
+<script>
+fetch('/logo.txt', {cache: 'no-store'})
+  .then(r => r.ok ? r.text() : Promise.reject(r.status))
+  .then(t => { document.getElementById('logo-ascii').textContent = t; })
+  .catch(() => { document.getElementById('logo-ascii').textContent = '(no logo_*.txt found in assets/)'; });
+</script>
 <script>
 // Hot-reload only: if index.html changes on disk, pick it up without a
 // manual refresh. No other debug UI right now -- add back as needed.

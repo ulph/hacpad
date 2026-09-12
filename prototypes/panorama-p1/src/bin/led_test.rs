@@ -48,13 +48,29 @@ fn find_port(out: &MidiOutput, needle: &str) -> Result<MidiOutputPort, Box<dyn E
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "on".to_string());
-    let value: u8 = if mode == "off" { 0 } else { 127 };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mode = args.first().map(|s| s.as_str()).unwrap_or("on");
 
     let out = MidiOutput::new("hacpad-led-test")?;
     let port = find_port(&out, "PANORAMA P1 Instrument")?; // default port
     let mut conn = out.connect(&port, "hacpad-led-test-conn")?;
 
+    if mode == "widget" {
+        // Test whether the native on-screen knob/slider widgets track a
+        // synthetic CC value the same way they track a real physical touch
+        // -- if so, that's a much richer "drawing" channel than the text
+        // SysEx path (real widget graphics, not just characters), driven by
+        // plain Control Change, no SysEx involved at all.
+        let cc: u8 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(64);
+        let value: u8 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
+        println!("Sending CC {cc} = {value} (plain Control Change, no SysEx)...");
+        conn.send(&[0xB0 | CHANNEL, cc, value])?;
+        println!("Holding 5s to observe...");
+        sleep(Duration::from_secs(5));
+        return Ok(());
+    }
+
+    let value: u8 = if mode == "off" { 0 } else { 127 };
     println!("Setting {} LED CCs to value {value}...", LED_CCS.len());
     for &cc in LED_CCS {
         conn.send(&[0xB0 | CHANNEL, cc, value])?;

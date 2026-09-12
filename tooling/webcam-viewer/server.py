@@ -33,6 +33,20 @@ DEVICE = sys.argv[1] if len(sys.argv) > 1 else "/dev/video0"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8090
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "index.html")
+REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
+LOGO_PNG = os.path.join(ASSETS_DIR, "logo.png")
+
+
+def find_logo_txt():
+    """Pick the logo_NxM.txt ASCII-art file in assets/, if any (dimensions
+    are encoded in the filename since we regenerate this at different sizes
+    -- rows x columns -- while iterating)."""
+    try:
+        candidates = sorted(f for f in os.listdir(ASSETS_DIR) if f.startswith("logo_") and f.endswith(".txt"))
+    except OSError:
+        return None
+    return os.path.join(ASSETS_DIR, candidates[0]) if candidates else None
 
 SOI = b"\xff\xd8"
 EOI = b"\xff\xd9"
@@ -100,6 +114,10 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_stream()
         elif self.path == "/state.json":
             self._serve_state()
+        elif self.path == "/logo.png":
+            self._serve_file(LOGO_PNG, "image/png")
+        elif self.path == "/logo.txt":
+            self._serve_logo_txt()
         else:
             self.send_response(404)
             self.end_headers()
@@ -134,6 +152,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_file(self, path, content_type):
+        try:
+            with open(path, "rb") as f:
+                body = f.read()
+        except FileNotFoundError:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_logo_txt(self):
+        path = find_logo_txt()
+        if path is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self._serve_file(path, "text/plain; charset=utf-8")
 
     def _serve_state(self):
         with state_lock:

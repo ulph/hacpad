@@ -15,8 +15,16 @@
 > binary) has the corrected port mapping and is smoke-tested end-to-end (init → screen write → CC
 > input listen). Multi-line text (`\n`-separated) and a full bordered ASCII logo banner are also
 > confirmed rendering correctly — see "Sixth finding". See `prototypes/panorama-p1/README.md` for
-> how to run it. Remaining open item: a real per-field page-composition write (not just the one-shot
-> "message" shortcut) — see "Next steps".
+> how to run it.
+>
+> **Correction (important):** the "Seventh finding" below, claiming the message write is a
+> "column-major rotated character grid" needing transposed ASCII art, **was wrong** — it was an
+> artifact of the debugging webcam being mounted 90° off from the device without that being accounted
+> for. Corrected: it's an ordinary top-to-bottom, left-to-right multi-line text box, nothing rotated or
+> transposed. See the correction under "Seventh finding" for how this was caught, and "Ninth finding"
+> for how real plugin-parameter text (names/values from Bitwig's API) actually flows into the screen
+> via a *separate*, structurally different general per-field compose write — the still-open item for a
+> future session, not yet tried with real content.
 
 Device confirmed connected: `Nektar Technology / PANORAMA P1`, USB VID:PID `2467:2025` (`/sys/bus/usb/devices/1-1/`).
 
@@ -442,51 +450,67 @@ per-segment rotated-column layout as everything else, and only *looked* like a n
 because the symmetric `#`-border padding lines made the rotation easy to miss at a glance. See the
 Seventh finding for the corrected, actual layout model.
 
-## Seventh finding: the "message" write is a column-major character grid, not a text paragraph
+## Seventh finding (RETRACTED — see correction below)
 
-Investigated further (per the user's prompt to re-read the driver sources and reason from the byte
-protocol) why multi-`\n` messages don't render as an ordinary top-to-bottom paragraph:
+~~The "message" write is a column-major character grid, not a text paragraph~~ — **this entire
+conclusion was wrong**, caused by an unaccounted-for camera mount rotation, not any real device
+behavior. Left in place (struck through) rather than deleted, as a record of the mistake and how it
+was found, per the reasoning below.
 
-- **`.message` (the field `writeMessageToDisplay` ultimately sends) is never actually set to a real
-  content string anywhere in `PANORAMA_P1.control.js`** — only initialized to `"x"`/`""` in the reset
-  functions and passed through as-is in `OutputState.prototype.send`. `pageTemplate` value `1` (the
-  constant this function always uses) is real and defined, but **Nektar's own P1 driver never
-  exercises this write path with actual content**. We are in genuinely uncharted territory relative to
-  the shipped driver, not replicating a known-used feature.
-- The two always-zero bytes in the write (`uint7ToHex(0)` twice, hardcoded in the driver's own
-  `writeMessageToDisplay`) are not a slot index or coordinate — they're fixed placeholders in the JS.
-  Whatever splits the payload into separate on-screen regions happens in the **device firmware**, not
-  as a parameter exposed by the driver.
-- Empirically (webcam-confirmed) determined the actual layout:
-  - A message with **no `\n`** renders as a single **vertical, rotated 90°** run of text, up to at
-    least **30 characters**, reading top-to-bottom in one column, with no visible truncation at 30
-    chars (`"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123"` rendered in full).
-  - Each **`\n`-delimited segment gets its own column**, placed side-by-side left-to-right across the
-    screen — confirmed with 8, 9, and 16 segments (`LINE-01`..`LINE-16`-style and `01`..`16`), all 16
-    fitting on screen at once without wrapping to a second tier. 30 identical single-char segments
-    (`"A\nA\n...\nA"`) did **not** all fit in one pass (visibly fewer columns rendered than 16-30) —
-    the exact upper bound on column count wasn't pinned down beyond "somewhere above 16, below 30",
-    and wasn't worth chasing further before moving on to actually using the grid.
-  - **Practical working canvas: at least 16 columns × ~30 rows** of individual character cells,
-    addressed by `\n` = "next column", ordinary characters = "next row down within the current
-    column". This is a real, usable 2D text grid — just **column-major**, not row-major.
-- **Consequence for ASCII art**: a normal row-major ASCII-art string (each line = one horizontal row of
-  the picture) will NOT render as a coherent image through this path — each line lands in its own
-  separate column instead of stacking. To draw a real 2D image, the source art must be **transposed**
-  first: each `\n`-delimited segment sent to the device must be one **column** of the target picture,
-  written top-to-bottom, with successive segments being successive columns left-to-right.
-- **Font size**: no evidence of a size/scale parameter anywhere in this write's byte layout — this
-  path appears to be a single fixed (small) font. A larger font, if one exists at all on this device,
-  would have to come from a different `DISPLAY_ID`/page-composition target (untested; the native
-  Faders page does show a visibly larger font for fader *values* than for labels, so bigger fonts likely
-  exist somewhere in the firmware, just not proven reachable from this specific write path yet).
-- **Freeform/pixel graphics, custom glyphs, and color**: no evidence found of a raw pixel/framebuffer
-  command anywhere in the driver source (the full command-byte space was already enumerated earlier —
-  `06`/`08`/`09`/`0B` only, see "Command-byte space enumerated" above) or in this write's structure — no
-  width/height/coordinate/color fields exist in the bytes we control. Sending non-ASCII byte values to
-  see if the font has extra custom glyphs (icons, block characters, etc.), and testing whether the
-  full page-composition path (as opposed to this message path) exposes a bigger font or per-field
-  color, are both still open and untested.
+**What actually happened**: the webcam used to photograph the P1's screen throughout this whole
+investigation is mounted **physically rotated 90°** relative to the device — a fact about the camera
+rig, not the device, that hadn't been accounted for when reading any of the photos. Every screenshot in
+this document up to this point was interpreted at the wrong orientation. Once the user pointed this
+out and every affected photo was re-rotated 90° for review, the "column-major, rotated-per-segment"
+model collapsed completely: physical button labels (`Shift`, `Mode`, `Undo`, etc.) only read correctly
+upright after this correction, and — decisively — text that had looked like separate rotated columns
+(`LINE-01`..`LINE-16`, `ABCDEFGHIJKLMNOPQRSTUVWXYZ0123`) turned out to be perfectly ordinary,
+non-rotated, non-mirrored text, reading left-to-right, stacked top-to-bottom, exactly like a normal
+text box. **`\n` just means "next line", the way it does everywhere else.** There is no column-major
+grid, no per-segment rotation, nothing exotic — the "message" write is a plain multi-line text field.
+
+The parts of the original finding that don't depend on the (wrong) rotation model still stand:
+- `.message` is genuinely never set to real content anywhere in `PANORAMA_P1.control.js` — this write
+  path is real but unexercised by Nektar's own P1 driver.
+- The two always-zero bytes in the write are fixed placeholders, not a coordinate/index.
+- A single line holds at least 30 characters without truncation; at least 16 lines have been shown to
+  stack without an obvious cutoff (exact upper bounds on either axis still not pinned down precisely,
+  and not very important now that the addressing model is simple).
+- The **total message length is still capped near ~127 bytes** (the observed corruption/rejection at
+  ~400+ bytes stands on its own, independent of the rotation mistake — see below).
+- No evidence of a size/scale parameter, raw pixel/framebuffer command, custom glyph range, or color
+  field anywhere in this write's byte layout or the wider command-byte space (`06`/`08`/`09`/`0B` only).
+  These remain genuinely unexplored/unsupported as far as this write path goes.
+
+**Consequence for ASCII art**: a normal row-major ASCII-art string (one line per row of the picture,
+read and written exactly as you'd expect) renders correctly, right side up, no transposition needed.
+Confirmed working: a small (20×6, then a proportionally-corrected 26×4) row-major bitmap conversion of
+`assets/logo.png`, resized/thresholded with Pillow and sent verbatim, rendered as a recognizable (if
+low-resolution) dot-matrix version of the logo. At this scale (~100-125 total characters) a
+faithful reproduction of a curvy wordmark isn't really achievable — this is a hardware/byte-budget
+ceiling, not a conversion-quality problem. See `assets/logo_20x72.txt` (human-readable reference size,
+not sent to the device) vs. the much smaller device-constrained attempts.
+
+### Two more things ruled out while investigating this
+
+- **The single-byte length ceiling is real and firmware-level, not a driver convention we can work
+  around.** Tried sending the same `pageTemplate=1` write using the *general* per-field compose shape
+  (`<index><len><text>`, each entry with its own independent length byte, no shared total-length field)
+  instead of the fixed shortcut shape. The device replied with a short, distinctly different message
+  (`F0 00 01 77 7F 7E F7`) that looks like an error/NAK rather than its usual ack — this specific
+  firmware routine only understands its one fixed shape; it does not accept the general compose
+  format. Sending several *separate* `pageTemplate=1` writes in sequence was also tried: each new write
+  fully replaces the previous one rather than layering/accumulating, so there's no way to build a
+  bigger image out of several small writes through this specific mechanism. Any real "chunking" would
+  have to target the general per-field compose path (see the Ninth finding below) instead.
+- **Injecting a synthetic Control Change value does *not* move the native on-screen fader/knob
+  widgets.** The Internal-mode "monitor" screen (the one showing `MIDI CC n`, live fader/knob graphics)
+  only reflects MIDI the device itself sends *out* from physical touches — it's a read-only status
+  display of the hardware's own state, not a receiver for externally-injected values. Sending our own
+  CC into the device (confirmed via the same mechanism used successfully for LEDs) had no visible
+  effect on it at all; the "last touched" readout kept showing whatever the user had actually pressed,
+  never our injected CC number. Real widget-driving (if possible at all) would have to go through the
+  per-field page-composition values below, not this monitor screen.
 
 ### A tentative probe of the full page-composition path (pageTemplate 16+)
 
@@ -498,13 +522,65 @@ a small status-label area near a live CC readout. This is a real, contained effe
 runaway state), but far short of a distinct "Bitwig Mixer page" with its own colors/widgets — more
 likely we just poked one field of whatever the firmware's Internal-mode UI already renders, since
 `06`'s payload has no field wide enough to select a whole alternate rendering (no color/coordinate
-bytes exist anywhere in the protocol we've read). **Working theory, not yet confirmed**: the rich
-visuals seen throughout this whole investigation (colored tabs, backgrounds, slider-widget graphics,
-larger fonts for values) are native firmware chrome tied to *which page/tab is active*, not something
-directly controllable via arbitrary SysEx byte fields — the DAW-facing protocol likely only ever fills
-in *text* within fields the firmware has already decided how to draw. Not conclusively settled; would
-need either a real Bitwig session capture or much more careful, systematic `displayId`/`pageTemplate`
-probing to confirm.
+bytes exist anywhere in the protocol we've read). The working theory here — that the rich visuals
+(colored tabs, backgrounds, slider-widget graphics, larger value fonts) are native firmware chrome tied
+to which page/tab is active, and the DAW-facing protocol only ever fills in *text* within fields the
+firmware has already decided how to draw — is now substantially **confirmed** by tracing the real data
+pipeline below (Ninth finding): every write the real driver ever does is *text into a named field*,
+never a color, coordinate, or widget-selection byte.
+
+## Ninth finding: where plugin-parameter text comes from, and how it reaches the screen
+
+Traced the full pipeline the real driver uses to put live Bitwig content (e.g. a plugin's parameter
+names and values) on screen, end to end, from the Bitwig Controller API to the literal SysEx bytes:
+
+1. **Subscribe to the Bitwig API**, once, in `nektarinit()` — for each of the 8 remote-control "pages"
+   slots of the currently selected instrument:
+   ```js
+   InstParameter = primaryInstrument.getParameter(b);
+   InstParameter.addNameObserver(8, "", instParameterNames.setter(b));          // e.g. "Cutoff"
+   InstParameter.addValueDisplayObserver(8, "", instParameterDisplays.setter(b)); // e.g. "1.2 kHz"
+   InstParameter.addValueObserver(127, parameterValues.setter(b));               // raw 0-127
+   ```
+   Bitwig calls these observer callbacks itself, live, whenever the selected plugin, page, or parameter
+   value changes — this is push-based, not polled.
+2. **Local cache**: each observer just writes into a plain `BufferedElementArray("", 8)` (`
+   instParameterNames`, `instParameterDisplays`, `parameterValues` — simple JS arrays-with-a-setter),
+   giving the driver a live local mirror of "the 8 parameter names/value-strings/raw-values" at all
+   times, independent of anything screen-related.
+3. **Page-local aliasing**: whichever source is actually relevant right now (instrument parameters vs.
+   macros vs. the cursor-device's parameters) gets pointed at by a shared pair of local variables,
+   e.g. `parameterNames = instParameterNames; parameterDisplays = instParameterDisplays`. This is just
+   so the next step doesn't need to know *which* source it's showing.
+4. **Copied into `OutputState` by `updateOutputState()`** (called every `flush()`, i.e. on basically
+   any relevant change): `b.ctrlElementName[a] = parameterNames.values[a]; b.ctrlElementValue[a] =
+   parameterDisplays.values[a]; b.encoderValue[a] = parameterValues.values[a]` for each of the 8 slots.
+5. **Diffed and flushed by `OutputState.prototype.send()`**: compares each `ctrlElementName[b]`/
+   `ctrlElementValue[b]` against what was last actually sent to the device; only slots that changed (or
+   a forced full refresh) get written, via `composeStart(pageTemplate, DISPLAY_ID.ctrlElementName)` /
+   `textEntry(1+b, text)` / finish — i.e. real per-field diffing, unlike our one-shot `pageTemplate=1`
+   message write which always resends everything.
+6. **Actual bytes on the wire**: `F0 00 01 77 7F 01 06 <pageTemplate> <displayId> <index><len><text>
+   [00 <index><len><text> ...] F7` — this is the *same* general compose shape as the "Browser / Preset
+   / Remote / Pages" example message found early in this investigation (from the community reference),
+   and structurally distinct from the `pageTemplate=1` message shortcut we've been using all session
+   (different header shape, per-entry length bytes instead of one combined length, no trailing `04`).
+
+**In short**: plugin-parameter text on screen is never anything more exotic than a plain string,
+sourced from a Bitwig API observer callback, copied through a couple of local caches, and written into
+a named field slot via the general compose SysEx shape. There is no glyph-selection, color, or
+coordinate mechanism anywhere in this pipeline — "which glyphs get drawn" is entirely determined by
+*what text Bitwig's API handed the driver*, not by anything screen/graphics-specific in the protocol.
+
+**Why views differ per-DAW** (Bitwig vs. Reaper vs. Cubase, per the user's own recollection of using
+this hardware): the whole *page layout* — which page templates exist, which fields each one has, when
+to switch pages, what text goes in which field and when — is a property of **which DAW's own control
+script is running**, not the device. `PANORAMA_P1.control.js` is Bitwig-specific; a Reaper integration
+is a structurally different script (very likely built on Reaper's own ReaScript/control-surface API,
+which we have not examined at all this session — only the Bitwig driver is in hand). The device
+firmware just renders whatever page template + field-text instructions it's sent; it has no built-in
+notion of "the Bitwig view" vs. "the Reaper view" beyond whatever fixed set of page-template IDs its
+firmware happens to support, which each DAW's script then uses however its author chose to.
 
 ## Eighth finding: LED on/off feedback confirmed working
 
