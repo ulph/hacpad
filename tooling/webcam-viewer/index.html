@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Panorama P1 debug view</title>
+<style>
+  html, body { margin: 0; background: #111; }
+  #feed { display: block; max-width: 100vw; }
+</style>
+</head>
+<body>
+<img id="feed" src="/stream.mjpg">
+<script>
+// Hot-reload only: if index.html changes on disk, pick it up without a
+// manual refresh. No other debug UI right now -- add back as needed.
+let knownHtmlMtime = null;
+async function poll() {
+  try {
+    const res = await fetch('/state.json', {cache: 'no-store'});
+    const state = await res.json();
+    if (knownHtmlMtime === null) {
+      knownHtmlMtime = state._html_mtime;
+    } else if (state._html_mtime !== knownHtmlMtime) {
+      location.reload();
+      return;
+    }
+  } catch (e) { /* ignore, retry next tick */ }
+  setTimeout(poll, 700);
+}
+poll();
+</script>
+</body>
+</html>
