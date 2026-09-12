@@ -94,6 +94,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         None
     };
 
+    // `msg_test --raw2 "F0 ... F7" "F0 ... F7"` sends two separate raw SysEx
+    // messages back to back, in the same session (no re-init between them) --
+    // used to test whether two writes to different fields compose, versus
+    // the second simply overwriting whatever the first drew.
+    let raw2: Option<(Vec<u8>, Vec<u8>)> = if args.first().map(|s| s.as_str()) == Some("--raw2") {
+        Some((parse_hex(&args[1])?, parse_hex(&args[2])?))
+    } else {
+        None
+    };
+
     let text = args.join(" ");
     let text = if text.is_empty() { "HACPAD".to_string() } else { text };
 
@@ -133,6 +143,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     sleep(Duration::from_millis(50));
     default_conn.send(&sysex(&INIT_2))?;
     sleep(Duration::from_millis(200));
+
+    if let Some((first, second)) = &raw2 {
+        println!("Sending first message ({} bytes)...", first.len());
+        default_conn.send(first)?;
+        sleep(Duration::from_millis(100));
+        println!("Sending second message ({} bytes)...", second.len());
+        default_conn.send(second)?;
+        println!("Holding for 8s so we can photograph the screen...");
+        sleep(Duration::from_secs(8));
+        println!("Sending exit sequence...");
+        default_conn.send(&sysex(&EXIT_1))?;
+        sleep(Duration::from_millis(50));
+        default_conn.send(&sysex(&EXIT_2))?;
+        return Ok(());
+    }
 
     let msg = match &raw_override {
         Some(raw) => {

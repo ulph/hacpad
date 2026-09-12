@@ -610,7 +610,70 @@ visible change in this test — either the P1 doesn't have physically wired LEDs
 buttons (plausible; some of this driver is shared across P1/P4/P6 which differ in physical controls),
 or they need a different value/channel nuance not yet tried.
 
-## Debugging technique: USB webcam on the screen
+## Tenth finding: probing page templates one at a time, on real hardware
+
+Per the user's request, testing each page-template ID directly against the device (not just reading
+source), one at a time, to build a concrete "what does this one actually do" catalog.
+
+### Template 2 — sets the bottom menu-button row
+
+Replayed the known-real community-reference example verbatim: `06 02 04 00 05 00 00 00 00 00 00 01 01
+2B 00 02 07 "Browser" 00 03 06 "Preset" 00 04 06 "Remote" 00 05 05 "Pages" F7` (pageTemplate `02`,
+displayId `04`, 5 text entries). **Confirmed on real hardware**: the bottom row of 5 buttons, which
+normally reads the page tabs (`Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup`), now reads `+` /
+`Browser` / `Preset` / `Remote` / `Pages` instead — a clean, direct, reproducible effect. Reran twice
+for confirmation, identical result both times. This is genuinely useful: **template 2 + displayId 4 is
+how the driver relabels the 5 bottom menu buttons**, independent of whatever page/tab is otherwise
+active (the fader bars and live CC readout above it were untouched).
+
+### Template 16 — sets the top title-bar row
+
+Hand-built (no known-real example for this one): `06 10 01 <3 indexed entries>` — pageTemplate `10`
+(16), displayId `01`, entries at index 1/2/3 with 4-char strings `"TTL1"`/`"TTL2"`/`"TTL3"`.
+**Confirmed on real hardware**: the top title-bar row, which normally reads `Nektar` / `Panorama P1` /
+`1-NEKTAR 1`, now reads `TTL1` / `TTL2` / `TTL3` in the same three colored segments. The bottom tab row
+had reverted to its normal `Faders`/`Encoders`/`Cntrl Edit`/`Global`/`Setup` labels (i.e. the previous
+template-2 test's custom labels don't persist across a new write — each write only touches its own
+targeted field, nothing else carries over). **Template 16 + displayId 1 = the 3-segment title bar.**
+
+For reference, the full `DISPLAY_ID` enum (confirmed by direct extraction, not memory):
+```
+0 = padState/padValue      1 = titleBar (3 slots)      2 = currentParameterInfo (1)
+3 = currentParameterValue  4 = menuButtonLabel/Type (5) 5 = pageLabels (3)
+6 = ctrlElementName (8)    7 = ctrlElementValue AND faderElementValue (8/9, shared id)
+8 = unidentified so far
+```
+
+### Template 16, displayId 6 — sets the 8 knob NAME labels (real plugin-parameter-name field)
+
+`06 10 06 <8 indexed entries, one per encoder>` — `CUT`/`RES`/`ATK`/`DEC`/`SUS`/`REL`/`DRV`/`MIX`
+(deliberately synth-parameter-shaped names). **Confirmed on real hardware, cleanly**: all 8 knob
+labels changed to exactly this text, laid out in the same 4×2 grid the native "Encoders" view already
+uses. This is the exact field the traced Ninth-finding pipeline (`ctrlElementName = parameterNames`)
+writes plugin parameter names into — now demonstrated directly, with our own arbitrary text, no live
+Bitwig session needed. **Template 16 + displayId 6 = the 8 encoder name labels.**
+
+### Template 16, displayId 7, indices 1-8 — the paired VALUE field — composes correctly with displayId 6
+
+First attempt sent the 8 value-shaped strings (`1.2k`/`45%`/`12ms`/`80ms`/`0dB`/`200ms`/`30%`/`wet`) via
+`06 10 07 <8 entries>` as a **separate `msg_test` process run** from the displayId-6 (name) test above.
+Result looked like the value strings had simply overwritten the name strings in the same position —
+but that was misleading: each separate process run does its own init sequence from scratch, which
+resets `OutputState` and clears whatever the previous run had drawn, so this wasn't a real "do these
+two fields share one slot" test at all.
+
+**Corrected test**: added a `--raw2 <msg1> <msg2>` mode to `msg_test.rs` to send both writes in the
+*same* session (one init, two SysEx messages ~100ms apart, no reset in between) — the same message
+order as before (displayId 6 = names, then displayId 7 = values). **Result: both rendered together,
+simultaneously** — the value string above each knob, the name string below it (`1.2k` above `CUT`,
+`45%` above `RES`, etc.) — exactly matching how a real Bitwig parameter display should look. So
+`ctrlElementName` and `ctrlElementValue` (indices 1-8) are indeed two independent, simultaneously
+visible fields, each keeping its own last-written content — the earlier "they overwrite each other"
+read was an artifact of testing across separate process restarts, not real coexistence behavior.
+(The real driver's source shows `ctrlElementValue` and `faderElementValue` further sharing this *same*
+displayId 7, distinguished only by index range — `ctrlElementValue` uses indices 1-8,
+`faderElementValue` uses indices 9-17 (`1+b+8`) — the 9-17 range almost certainly renders near the
+fader bars instead; not yet tested directly.)
 
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
 sent SysEx message actually changed the display, without needing the official software or a second
