@@ -754,6 +754,29 @@ a static logo written here would get overwritten by the next interaction. The ti
 1`) is the better fit for anything meant to stay put; this one is better reserved for its intended
 live-feedback purpose, or used only transiently (e.g. a startup splash before real use begins).
 
+### Template 18 — a genuinely different layout: faders, not knobs
+
+`06 12 01 <3 title-bar entries>` then `06 12 06 <8 ctrlElementName entries, "N1".."N8">`, sent together
+via the new `--rawN` mode. **Confirmed on real hardware**: the title bar behaves identically to
+templates 16/17 (`T18A`/`T18B`/`T18C`). But the main content area is different — **8 vertical fader
+bars** (split visually into two groups of 4), with our `ctrlElementName` text (`N1`-`N8`) rendered as
+small labels beneath each fader, not next to a knob. This is a distinct widget from template 16/17's
+4×2 knob grid, using the *same* `displayId 6` field. Consistent with template 18 being **Instrument
+Layer Container** (channel-strip/layer semantics naturally fit a fader-per-layer UI). The bottom tab
+row wasn't visible in this framing — not clear whether it's actually absent for this template or just
+cropped out of frame.
+
+### `main.rs` integration note: switching pageTemplate resets the page
+
+Tried wiring `write_title_bar()` into the real `panorama-bridge` binary as its startup branding,
+followed immediately by the existing `write_message()` (pageTemplate 1) call. Result: only the
+`write_message` text rendered — the title bar was gone. **Switching pageTemplate mid-session resets
+the whole page context** (matches the real driver's `resetOutputToUnknown()` call whenever
+`pageTemplate` changes in `OutputState.prototype.send()`), so a pageTemplate-1 write right after a
+pageTemplate-16 write wipes out what the 16-write drew. These two mechanisms don't currently coexist
+in one session; `main.rs` was left using `write_message` only for its default screen text pending
+further mapping of whether any single template offers both a title bar and a message-shaped field.
+
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
 sent SysEx message actually changed the display, without needing the official software or a second
 reference implementation running. Practical notes from doing this:

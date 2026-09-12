@@ -89,6 +89,47 @@ fn write_message(text: &str) -> Vec<u8> {
     sysex(&body)
 }
 
+// A "real" DAW page template (Bitwig's Mixer page, per the driver's own
+// pageTemplate enum). Confirmed on real hardware: writing to this template's
+// titleBar field doesn't require a live Bitwig session -- see
+// research/panorama-p1-protocol-notes.md, "Tenth finding".
+const PAGE_TEMPLATE_MIXER: u8 = 16;
+// DISPLAY_ID.titleBar, confirmed by direct extraction from the driver's
+// DISPLAY_ID enum (not a guess) -- see protocol notes, "Tenth finding".
+const DISPLAY_ID_TITLE_BAR: u8 = 1;
+
+/// The general per-field page-composition write (`composeStart`/`textEntry`/
+/// finish in the real driver) -- structurally distinct from `write_message`'s
+/// fixed shape. Confirmed working for several fields this session (title bar,
+/// menu-button labels, encoder name/value, big-font readout).
+fn compose_write(page_template: u8, display_id: u8, entries: &[(u8, &str)]) -> Vec<u8> {
+    let mut body = vec![CMD_WRITE_DISPLAY, page_template, display_id];
+    for (i, (index, text)) in entries.iter().enumerate() {
+        if i > 0 {
+            body.push(0x00);
+        }
+        let bytes = text.as_bytes();
+        body.push(*index);
+        body.push(bytes.len() as u8);
+        body.extend_from_slice(bytes);
+    }
+    sysex(&body)
+}
+
+/// Sets the 3-segment title bar (confirmed real position: the row directly
+/// under the big-font readout). This is the right spot for anything meant to
+/// stay put -- unlike the big-font `currentParameterInfo` field, nothing else
+/// is fighting to overwrite it (see protocol notes, "Twelfth finding").
+fn write_title_bar(segments: [&str; 3]) -> Vec<u8> {
+    let entries: Vec<(u8, &str)> = segments
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.is_empty())
+        .map(|(i, s)| ((i + 1) as u8, *s))
+        .collect();
+    compose_write(PAGE_TEMPLATE_MIXER, DISPLAY_ID_TITLE_BAR, &entries)
+}
+
 // --- CC map ---------------------------------------------------------------
 // Confirmed against real hardware this session (fader/encoder/button CCs
 // verified live); transport/nav ordering within their ranges is still an
@@ -203,6 +244,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     default_conn.send(&sysex(&INIT_2))?;
     std::thread::sleep(Duration::from_millis(200));
 
+    // NOTE: sending a pageTemplate=1 (write_message) after a pageTemplate=16
+    // (write_title_bar) write clears the title bar -- switching pageTemplate
+    // resets the whole page context, so these two don't currently coexist in
+    // one session. Left as write_message only for now; revisit once the
+    // template map (in progress) says whether there's a page that has both a
+    // title bar AND a message-shaped field, or whether these are simply
+    // mutually exclusive display modes.
     println!("Writing screen message: {text:?}");
     default_conn.send(&write_message(&text))?;
 
