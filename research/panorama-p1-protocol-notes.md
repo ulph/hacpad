@@ -675,6 +675,16 @@ displayId 7, distinguished only by index range — `ctrlElementValue` uses indic
 `faderElementValue` uses indices 9-17 (`1+b+8`) — the 9-17 range almost certainly renders near the
 fader bars instead; not yet tested directly.)
 
+### Template 17, displayId 1 — same 3-segment title bar as template 16
+
+`06 11 01 <3 entries>` — `T17A`/`T17B`/`T17C`. **Confirmed on real hardware**: same effect as template
+16's displayId 1 test, the 3-segment title bar changed to this text. Suggests `displayId 1` (titleBar)
+is a shared/universal field across the real DAW page templates (16-22), not something unique to
+template 16 specifically — plausible, since every Bitwig page would want a common title-bar region
+regardless of which specific page is active. Not yet tested whether templates 17's *other* fields
+(ctrlElementName/Value, etc.) behave identically to 16's or differ in slot count/meaning — paused here
+for now, one template at a time as requested; templates 3/4/5 and 18-22 remain unexplored.
+
 A USB webcam pointed at the P1's own screen is a cheap, effective way to visually confirm whether a
 sent SysEx message actually changed the display, without needing the official software or a second
 reference implementation running. Practical notes from doing this:
