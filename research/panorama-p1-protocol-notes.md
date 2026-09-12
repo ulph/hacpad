@@ -1027,11 +1027,17 @@ one session): only **`displayId 3`** produced new visible content, beyond the al
 0/1/2/4/6/7. It renders in the **top-right of the big-font row**, directly paired with `displayId 2`
 (which sits top-left of that same row) — i.e. `displayId 2` is the parameter *name* and `displayId 3`
 is the parameter *value*, a matched pair for the "currently touched" readout (`currentParameterInfo` /
-`currentParameterValue` in the driver's own naming). No other id in the swept range (5, 8, 9-32, or any
+`currentParameterValue` in the driver's own naming). No other id in the swept range (5, 9-32, or any
 edge byte up to 255) produced any new visible content anywhere on screen. (Two entries in this same
 sweep, `displayId 1` and `6`, unexpectedly showed no effect despite being independently confirmed
 reliable elsewhere this session — most likely an isolated dropped message at this sweep's 600ms
 cadence, not a real behavior change; not treated as a finding.)
+
+**Correction: displayId 8 was wrongly cleared here.** This same combined-sweep photo also included
+`displayId 8`'s write, and at the time nothing distinctive was noticed for it. It was, in fact, already
+producing visible content (see the Nineteenth finding) — just missed on a single quick visual pass
+through a busy combined photo. Both 5 and 8 are confirmed real, working fields; see the Nineteenth
+finding for 8 and its own entry for 5.
 
 **`page_template` sweep** (`displayId` fixed at 1/title-bar, one message per template id, ids 6-15,
 23-32, and edge bytes up to 255): the first several new values worked and rendered genuinely distinct,
@@ -1074,6 +1080,100 @@ send many independent field writes back to back (they don't interfere, per the T
 findings) and only needs one final photo, while a template sweep specifically needs one photo *per*
 step (since template changes visibly replace the whole screen) but still only needs one process/session
 for the whole sweep, not one per value.
+
+### Sixteenth finding: templates 21 and 22 are genuinely distinct, not the same pad-grid family
+
+Asked directly: "is template 21 and 22 separable?" The original tests only ever sent 8
+`ctrlElementName` entries to either template and saw the same-looking 4x4 grid with the bottom two rows
+filled — not enough to tell them apart, so they'd been noted as "same family, not distinguished."
+Re-tested with a fuller isolated probe per template (fresh session each: title bar + big font + tabs +
+**16** names, mirroring the template-18 stacked-label test): **21 renders a full 4x4 grid, rows A-D, all
+16 pads individually labeled** (`X1`-`X16`, one label per pad, not stacked); **22 renders only a 3x4
+grid, rows A-C** — `X13`-`X16` don't appear anywhere, there's no 4th row rendered at all, not just an
+unlabeled one. So they ARE separable: 21 is the full 16-pad grid, 22 is a distinct 12-pad variant.
+Corrected `protocol.json`'s templates 21/22 entries and the webcam-viewer mockup accordingly (it
+previously had one shared "pads" option assuming 8, then 16, slots for both).
+
+### Seventeenth finding: the page_template validity ceiling — confirmed for 0-243 (CORRECTED, see below)
+
+The Fifteenth finding sampled representative values (0-32, plus edge bytes up to 255) and inferred a
+validity ceiling around template 22. Asked directly whether that was a real exhaustive search "all the
+way to 255" — it wasn't, so ran the actual full sweep: **every single byte value 0-255**, one
+`page_template` write each (`displayId` fixed at title-bar), photographing after every step in one
+continuous session.
+
+**Result** (at the time): the content area changes correctly through templates 0-9 and 16-22 (each
+rendering its own confirmed widget), and every value from 23 onward appeared to be a no-op — spot-checked
+photos at 23, 24, 30, 100, 150, and 200 were all pixel-identical (frozen on template 22's 3x4 pad grid).
+This was originally reported as exhaustively confirmed through 255.
+
+**Correction (see Eighteenth finding): that claim was wrong.** The sweep script only checked whether each
+photo capture succeeded — it never checked the child process's exit code or scanned for an error line.
+The underlying `msg_test` process actually died silently partway through (an ALSA transmission error at
+byte 244), and the wrapper's loop simply exited via EOF and printed "DONE" as if the sweep had finished
+normally. The spot-checked values (up to 200) remain validly confirmed as no-ops — those sends
+genuinely happened before the crash — but **245-255 were never actually tested** by that run. See the
+Eighteenth finding for the real cause and the follow-up test that actually covers that range.
+
+**Confirmed valid `page_template` set (still holds): {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 18, 19, 20,
+21, 22}.** Nothing else in 0-243 does anything; 244-255 covered separately, see below.
+
+(A same-style exhaustive sweep of `displayId` 0-255 was run alongside this and hit the exact same silent
+crash — see the Eighteenth and Nineteenth findings.)
+
+### Eighteenth finding: two SysEx bytes (0xF4/0xF5) are untransmittable, and my sweep scripts weren't checking for that
+
+Prompted by being caught not noticing the above: "so the process died and you did not notice?" — yes,
+exactly that. Every sweep script up to this point only checked whether the HTTP photo capture succeeded,
+never the child process's exit code or its output for an error line. Fixed going forward: check
+`returncode` and scan for an `Error:`/panic line before ever trusting a "DONE" as real completion.
+
+Re-tested the tail of the range (245-255) properly this time: a **fresh process per value**, blank
+(reset) first, exit code and stderr checked explicitly. Result: **byte 245 (`0xF5`) fails identically**
+to 244 (`0xF4`) — `Error: InvalidData("ALSA encoder reported invalid data")` — while **246 through 255
+all transmit successfully** (`returncode=0`, no error). `0xF4` and `0xF5` are the only two byte values in
+the entire 0-255 range where the ALSA rawmidi encoder itself refuses to send the message — not a device
+no-op, a hard failure at the transport layer, before the bytes ever reach the P1. (Notably, `0xF7` (247) — the literal SysEx end-of-message byte — transmits FINE when
+embedded as a `page_template`/`displayId` data byte; so does `0xF6` (246) and every other realtime status
+byte tried up to 255. Whatever `0xF4`/`0xF5` trip in the encoder isn't simply "any byte >= 0x80", since
+most such bytes pass through without complaint.) Practical upshot: `page_template`/`displayId` values 244 and 245 cannot be used at
+all via this raw-MIDI path; 0-243 and 246-255 can be sent (though per the Seventeenth finding, only
+{0-9, 16-22} of them do anything on this device).
+
+### Nineteenth finding: a new field exists at displayId 8 — but a false trail at 33/34 got there first, and the lesson matters
+
+A full-range `displayId` sweep (all values 0-255 set to their own number, on template 16 in one session)
+revealed a genuinely new UI element never seen before: a box on the right side of the content area, white
+border, an up-triangle near the top and a down-triangle near the bottom — a scroll/increment affordance
+of some kind. Tried to isolate exactly which id caused it by **range-halving bisection** — test 0-127,
+then 0-63, then 33-63, narrowing down to a final "33 or 34" — each step a fresh `msg_test` process, no
+explicit reset in between steps.
+
+**That whole bisection was invalid, and re-testing 33 and 34 in isolation (each freshly blanked first)
+proved it: neither one, alone or together, reproduces the box at all.** The real cause, found only once
+told directly to blank the screen before every single test ("ensure to FIRST blank the screen... do what
+I said. set all the display fields to the matching number. then, cycle through all the templates with a
+clean slate inbetween"), is **displayId 8** — confirmed with a proper blank-then-set-one-id-then-photograph
+cycle across ids 0-127, no state ever carried between steps. Adjacent-photo diffing across that clean run
+shows a sharp, unambiguous jump exactly at id=8, and the box (with an "8" label rendered inside it) is
+plainly visible in that single isolated photo.
+
+**Why the bisection was fooled**: none of the range-halving steps ever reset the device to a clean slate
+before testing a new range — each step was just a fresh `msg_test` *process* (a fresh MIDI *session*),
+which is not the same thing as a fresh *display state*. We had already established elsewhere in this
+document that displayed content survives across process restarts (title bar, big font, etc. all persist
+that way) — that same persistence is exactly what makes an unblanked bisection unsound: whatever set the
+box the first time (id 8, sent once, early, in the very first giant 0-255 combined sweep) just sat there,
+completely undisturbed, through every subsequent range test, because none of them ever contained an id
+capable of clearing it. The bisection kept "confirming" the box's presence in ever-narrower ranges purely
+because the ranges kept being subsets of a session that had never been reset — it would have "confirmed"
+presence in literally any range tested after the original id-8 write, including ranges that do nothing at
+all. The fix, exactly as instructed: blank first, set exactly one thing, observe, repeat — never let two
+different steps share undisturbed state.
+
+**Consequence for future testing on this device**: never trust a multi-step isolation test (bisection,
+range-narrowing, or any "vary one thing, hold the rest" protocol) unless every step starts from an
+explicitly-cleared, verified-blank state. A fresh process is not a fresh screen.
 
 ## Debugging technique: USB webcam on the screen
 

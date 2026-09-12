@@ -95,7 +95,8 @@ const LAYOUT_TO_TEMPLATE_NAME: &[(&str, &str)] = &[
     ("knobs", "mixer"),
     ("faders-split", "instrument_layer_container"),
     ("faders-row", "faders_row_a"),
-    ("pads", "drum_pads"),
+    ("pads16", "drum_pads"),
+    ("pads12", "drum_pads_3row"),
     ("list", "list"),
     ("grid5", "grid5"),
 ];

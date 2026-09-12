@@ -106,16 +106,23 @@
     </fieldset>
 
     <fieldset>
-      <label>Content widget (which page template family)</label>
+      <label>Page template (only controls WHICH WIDGET renders the fields below -- not
+        which fields exist or hold what; displayId addressing is confirmed
+        template-independent, see the protocol notes)</label>
       <select id="in-layout">
         <option value="knobs">Knobs, 4x2 (templates 16/17)</option>
-        <option value="faders-split">Faders, split 4+4 (template 18)</option>
+        <option value="faders-split">Faders, split 4+4, 16 stacked labels (template 18)</option>
         <option value="faders-row">Faders, one row of 8 (templates 19/20)</option>
-        <option value="pads">Pad grid, 4x4 (templates 21/22)</option>
+        <option value="pads16">Pad grid, 4x4, 16 pads (template 21)</option>
+        <option value="pads12">Pad grid, 3x4, 12 pads (template 22 -- confirmed distinct from 21, Sixteenth finding)</option>
         <option value="list">Fader + list (template 4)</option>
         <option value="grid5">Plain 2x4 grid, no widgets (template 5)</option>
       </select>
-      <label>Names (displayId 6, up to 8 -- 16 for faders-split, comma-separated)</label>
+    </fieldset>
+
+    <fieldset>
+      <label>Names (displayId 6, comma-separated -- slot count depends on the widget above:
+        8 for knobs/faders-row/grid5, 16 for faders-split and pads16, 12 for pads12, 5 for list)</label>
       <input type="text" id="in-names" value="CUT,RES,ATK,DEC,SUS,REL,DRV,MIX">
       <label>Values (displayId 7, up to 8, comma-separated -- knobs only)</label>
       <input type="text" id="in-values" value="1.2k,45%,12ms,80ms,0dB,200ms,30%,wet">
@@ -221,17 +228,24 @@ function renderContent() {
     row.className = 'fader-row';
     for (let i = 0; i < 8; i++) row.appendChild(fader(names[i] || '', 40 + (i % 4) * 8));
     content.appendChild(row);
-  } else if (layout === 'pads') {
+  } else if (layout === 'pads16' || layout === 'pads12') {
+    // Template 21 (pads16): full 4x4 grid, rows A-D, all 16 pads individually
+    // labeled. Template 22 (pads12): confirmed genuinely distinct (Sixteenth
+    // finding), a 3x4 grid, rows A-C only -- there is no 4th row at all, not
+    // just an unlabeled one. names[12-15] are ignored for pads12 since the
+    // device itself never renders a 4th row for that template.
+    const nrows = layout === 'pads16' ? 4 : 3;
     const grid = document.createElement('div');
     grid.className = 'pad-grid';
-    const rows = ['D', 'C', 'B', 'A'];
-    for (let r = 0; r < 4; r++) {
+    grid.style.gridTemplateRows = `repeat(${nrows}, 1fr)`;
+    const rows = (layout === 'pads16' ? ['D', 'C', 'B', 'A'] : ['C', 'B', 'A']);
+    for (let r = 0; r < nrows; r++) {
       const lbl = document.createElement('div');
       lbl.className = 'pad-row-label';
       lbl.textContent = rows[r];
       grid.appendChild(lbl);
       for (let c = 0; c < 4; c++) {
-        const idx = (3 - r) * 4 + c; // row A = indices 0-3, row B = 4-7, etc.
+        const idx = (nrows - 1 - r) * 4 + c; // row A = indices 0-3, row B = 4-7, etc.
         const pad = document.createElement('div');
         const label = names[idx];
         pad.className = 'pad' + (label ? '' : ' empty');
