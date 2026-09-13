@@ -7,6 +7,14 @@
   html, body { margin: 0; background: #111; color: #ddd; font-family: monospace; }
   #feed { display: block; max-width: 100vw; }
 
+  #camera-controls { padding: 8px 16px; font-family: sans-serif; max-width: 480px; }
+  #camera-controls h3 { margin: 4px 0 6px; font-size: 13px; color: #9cf; }
+  .cam-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #aaa; margin: 3px 0; }
+  .cam-row label { flex: 0 0 180px; }
+  .cam-row input[type=range] { flex: 1; }
+  .cam-row .cam-val { flex: 0 0 50px; text-align: right; color: #eee; font-family: monospace; }
+  .cam-row input[type=checkbox] { width: auto; }
+
   #simulator { padding: 16px; display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; font-family: sans-serif; }
 
   /* --- the mocked-up device screen -------------------------------- */
@@ -105,6 +113,104 @@
 </head>
 <body>
 <img id="feed" src="/stream.mjpg">
+
+<div id="camera-controls">
+  <h3>Camera controls</h3>
+  <div id="camera-status" style="font-size:11px; color:#888; margin-bottom:6px;">connecting...</div>
+  <div id="camera-sliders"></div>
+</div>
+
+<script>
+// Bidirectional live camera tuning -- talks to
+// tooling/webcam-viewer/camera_control_server.py (port 8092), NOT server.py,
+// same "diff-and-broadcast" shape as the Panorama simulator's own WS but
+// deliberately simpler (every slider move just sends its own value; the
+// server reads back and broadcasts the REAL applied value, since v4l2
+// sometimes clamps/rejects what you ask for).
+(function () {
+  const CAM_CONTROLS = {
+    exposure_time_absolute: { min: 1, max: 10000, label: 'Exposure time' },
+    auto_exposure: { min: 0, max: 3, label: 'Auto exposure mode (1=manual)' },
+    brightness: { min: 30, max: 255, label: 'Brightness' },
+    contrast: { min: 0, max: 10, label: 'Contrast' },
+    saturation: { min: 0, max: 200, label: 'Saturation' },
+    sharpness: { min: 0, max: 50, label: 'Sharpness' },
+    backlight_compensation: { min: 0, max: 10, label: 'Backlight comp' },
+    white_balance_automatic: { min: 0, max: 1, label: 'Auto white balance' },
+    white_balance_temperature: { min: 2500, max: 10000, label: 'WB temperature' },
+    focus_automatic_continuous: { min: 0, max: 1, label: 'Auto focus' },
+    focus_absolute: { min: 0, max: 40, label: 'Focus' },
+  };
+
+  const container = document.getElementById('camera-sliders');
+  const sliders = {};
+  Object.entries(CAM_CONTROLS).forEach(([name, cfg]) => {
+    const row = document.createElement('div');
+    row.className = 'cam-row';
+    const label = document.createElement('label');
+    label.textContent = cfg.label;
+    row.appendChild(label);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = cfg.min;
+    input.max = cfg.max;
+    input.step = 1;
+    row.appendChild(input);
+    const val = document.createElement('span');
+    val.className = 'cam-val';
+    row.appendChild(val);
+    container.appendChild(row);
+    sliders[name] = { input, val };
+  });
+
+  const CAM_WS_PORT = 8092;
+  let camWs = null;
+  let camWsReady = false;
+  const camStatus = document.getElementById('camera-status');
+
+  function applyCamState(state) {
+    Object.entries(state).forEach(([name, value]) => {
+      const s = sliders[name];
+      if (!s) return;
+      // Don't stomp a slider the user is actively dragging.
+      if (document.activeElement !== s.input) s.input.value = value;
+      s.val.textContent = value;
+    });
+  }
+
+  function connectCam() {
+    camWs = new WebSocket(`ws://${location.hostname}:${CAM_WS_PORT}`);
+    camWs.addEventListener('open', () => {
+      camWsReady = true;
+      camStatus.textContent = 'camera control connected ✓';
+      camStatus.style.color = '#7fd07f';
+    });
+    camWs.addEventListener('close', () => {
+      camWsReady = false;
+      camStatus.textContent = 'camera control disconnected, retrying...';
+      camStatus.style.color = '#e08080';
+      setTimeout(connectCam, 1500);
+    });
+    camWs.addEventListener('error', () => camWs.close());
+    camWs.addEventListener('message', (ev) => {
+      try { applyCamState(JSON.parse(ev.data)); } catch (e) { /* ignore malformed */ }
+    });
+  }
+  connectCam();
+
+  let camPushTimer = null;
+  Object.entries(sliders).forEach(([name, s]) => {
+    s.input.addEventListener('input', () => {
+      s.val.textContent = s.input.value;
+      clearTimeout(camPushTimer);
+      camPushTimer = setTimeout(() => {
+        if (!camWsReady) return;
+        camWs.send(JSON.stringify({ [name]: parseInt(s.input.value, 10) }));
+      }, 150);
+    });
+  });
+})();
+</script>
 
 <div id="simulator">
   <div id="screen-wrap">

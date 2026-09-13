@@ -199,6 +199,139 @@ pub fn write_title_bar(page_template: u8, segments: &[String]) -> Vec<u8> {
     compose_write(page_template, DISPLAY_ID_TITLE_BAR, &indexed_entries(segments, 3))
 }
 
+// --- Semantic verb layer -----------------------------------------------
+//
+// Everything above this point is the WIRE layer: page_template ids,
+// displayId numbers, raw compose entries. See
+// research/panorama-p1-widget-model.md for the model this implements --
+// callers of `Background`/`switch_background_messages` never need to know
+// a template id or displayId number at all; the semantics (which fields
+// THIS widget shape actually draws) are the API surface instead.
+
+/// A raw padState byte, semantically -- source confirms a 9-value clip-state
+/// enum; we've only visually distinguished 2 of the 9 on hardware (see
+/// "Twenty-fifth finding"), so the rest are kept as `Raw(n)` rather than
+/// guessed at.
+#[derive(Clone, Copy, Debug)]
+pub enum PadState {
+    Default,
+    Lit, // confirmed red/pink tint on hardware
+    Raw(u8),
+}
+
+impl PadState {
+    fn as_byte(self) -> u8 {
+        match self {
+            PadState::Default => 0,
+            PadState::Lit => 1,
+            PadState::Raw(v) => v,
+        }
+    }
+}
+
+/// The Background verb (Axis 1's "Background" layer, paired with its own
+/// Content -- switching a Background always clears Content, so the two
+/// travel together in one call, per the widget-model doc). Each variant's
+/// fields are exactly what that Background's Content schema actually holds,
+/// confirmed on hardware ("Tenth"/"Fifteenth"/"Sixteenth" findings) -- no
+/// page_template id or displayId number appears anywhere in this type.
+pub enum Background {
+    /// 4x2 knob grid (the default page on connect).
+    Mixer { param_names: [String; 8], param_values: [String; 8] },
+    /// 8 faders split into two groups of 4; 16 labels, two stacked per fader.
+    FaderSplit { labels: [String; 16] },
+    /// 8 faders in one continuous row.
+    FaderRow { labels: [String; 8] },
+    /// 4x4 pad grid, rows A-D, all 16 pads individually labelable.
+    PadView { pad_names: [String; 16], pad_states: [PadState; 16] },
+    /// 3x4 pad grid, rows A-C only -- genuinely distinct from PadView, not
+    /// just an unlabeled 4th row (Sixteenth finding).
+    PadView3Row { pad_names: [String; 12], pad_states: [PadState; 12] },
+    /// 1 fader + a vertical bulleted list, hard-capped at 5 visible entries.
+    List { items: [String; 5] },
+    /// Plain 2x4 button grid, no fader/knob widgets.
+    Grid { labels: [String; 8] },
+    /// `L:`/`R:` locator bars + a 2x4 grid beneath.
+    TransportLauncher { loop_left: String, loop_right: String, labels: [String; 8] },
+    /// Content-area widget never characterized -- only the (template-
+    /// independent) bottom menu-button relabeling was ever tested against
+    /// this template. Kept as a bare marker, no content fields offered yet.
+    Menu,
+    /// A list with one row shown highlighted; exact slot count/labeling
+    /// scheme not characterized beyond "list-like" (Fifteenth finding) --
+    /// kept as a generic Vec rather than a confirmed fixed size.
+    ListHighlighted { items: Vec<String>, highlighted: usize },
+    /// 4 scene buttons `S1`-`S4` (+ a "B" indicator whose own field is
+    /// unidentified).
+    SceneButtons { labels: [String; 4] },
+    /// Up to 8 rows, each paired with a "Pre" label; this covers BOTH
+    /// template 8 and 9, which render indistinguishably (Fifteenth finding).
+    BrowserList { items: Vec<String> },
+    /// Reset sentinel -- Content writes are a confirmed no-op here.
+    Reset,
+}
+
+impl Background {
+    fn page_template(&self) -> u8 {
+        match self {
+            Background::Mixer { .. } => 16,
+            Background::FaderSplit { .. } => 18,
+            Background::FaderRow { .. } => 19,
+            Background::PadView { .. } => 21,
+            Background::PadView3Row { .. } => 22,
+            Background::List { .. } => 4,
+            Background::Grid { .. } => 5,
+            Background::TransportLauncher { .. } => 3,
+            Background::Menu => 2,
+            Background::ListHighlighted { .. } => 6,
+            Background::SceneButtons { .. } => 7,
+            Background::BrowserList { .. } => 8,
+            Background::Reset => 0,
+        }
+    }
+}
+
+/// THE verb that changes which Background is active. Per the widget-model
+/// doc, this is also the *only* way to dismiss Message or an open popup --
+/// there is no separate "dismiss," dismissing IS switching. `title_bar` is
+/// always resent here (chrome survives a switch untouched, so this is
+/// purely to guarantee the switch actually reaches the wire: a page_template
+/// change is a silent no-op unless piggybacked on some real field write --
+/// confirmed directly, "Thirty-second finding" -- so Background variants
+/// with no content fields of their own, like `Menu`/`Reset`, would otherwise
+/// send nothing at all and the switch would never happen).
+pub fn switch_background_messages(bg: &Background, title_bar: &[String]) -> Vec<Vec<u8>> {
+    let t = bg.page_template();
+    let mut msgs = vec![write_title_bar(t, title_bar)];
+    match bg {
+        Background::Mixer { param_names, param_values } => {
+            msgs.push(write_names(t, param_names));
+            msgs.push(write_values(t, param_values));
+        }
+        Background::FaderSplit { labels } => msgs.push(write_names(t, labels)),
+        Background::FaderRow { labels } => msgs.push(write_names(t, labels)),
+        Background::Grid { labels } => msgs.push(write_names(t, labels)),
+        Background::PadView { pad_names, pad_states } => {
+            msgs.push(write_names(t, pad_names));
+            msgs.push(write_pad_state(t, &pad_states.iter().map(|s| s.as_byte()).collect::<Vec<_>>()));
+        }
+        Background::PadView3Row { pad_names, pad_states } => {
+            msgs.push(write_names(t, pad_names));
+            msgs.push(write_pad_state(t, &pad_states.iter().map(|s| s.as_byte()).collect::<Vec<_>>()));
+        }
+        Background::List { items } => msgs.push(write_names(t, items)),
+        Background::TransportLauncher { loop_left, loop_right, labels } => {
+            msgs.push(write_page_labels(t, &[loop_left.clone(), loop_right.clone()]));
+            msgs.push(write_names(t, labels));
+        }
+        Background::Menu | Background::Reset => {} // no known/no real content schema -- title_bar alone still performs the switch
+        Background::ListHighlighted { items, .. } => msgs.push(write_names(t, items)),
+        Background::SceneButtons { labels } => msgs.push(write_names(t, labels)),
+        Background::BrowserList { items } => msgs.push(write_names(t, items)),
+    }
+    msgs
+}
+
 /// Bottom menu-button row -- confirmed to work with any template, not just
 /// template 2 (see the "Follow-up: displayId 4 works with ANY template"
 /// finding).
