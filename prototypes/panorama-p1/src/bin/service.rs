@@ -461,6 +461,18 @@ fn handle_client(
             let _ = socket.send(Message::Text(text.into()));
         }
     }
+    // The fixed list of every control this project has a real name for --
+    // sent once (it never changes at runtime, unlike inputSnapshot's
+    // values), so a client can render one field per control up front
+    // ("just show ALL of them as fields... I do not care much for the log
+    // style") instead of a list that only grows as controls happen to get
+    // touched.
+    {
+        let known = serde_json::json!({ "knownControls": known_input_controls() });
+        if let Ok(text) = serde_json::to_string(&known) {
+            let _ = socket.send(Message::Text(text.into()));
+        }
+    }
     // The semantic model's own view, independent of `last_state` above (see
     // Device.device_state's doc comment: the two are separate perspectives,
     // not reconciled into each other) -- so a client that speaks semantic

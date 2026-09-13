@@ -112,6 +112,14 @@
   .led-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #555; background: #222; cursor: pointer; padding: 0; }
   .led-dot.on { background: #e0a030; border-color: #ffc060; box-shadow: 0 0 6px #e0a030; } /* color unconfirmed on hardware -- on/off only is confirmed, hue is a placeholder */
   .led-dot.unknown { background: transparent; border: 1px dashed #555; cursor: default; } /* CC not yet found -- see checklist item 11 */
+
+  #input-fields { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .input-group-label { font-size: 10px; color: #789; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  .input-group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 4px; }
+  .input-field { display: flex; flex-direction: column; align-items: center; font-size: 9px; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 3px 2px; background: #0c0c0c; }
+  .input-field .iv { font-size: 12px; color: #eee; font-family: monospace; font-weight: bold; }
+  .input-field.touched { border-color: #4a7; background: #0e1a12; }
+  .input-field.pressed { border-color: #e0a030; background: #241a08; }
 </style>
 </head>
 <body>
@@ -418,7 +426,7 @@
       way. Move a fader/knob or press a button on the real hardware to see it change here.
     </div>
     <div id="input-updated" style="font-size:10px; color:#666; margin-bottom:4px;">no input observed yet this connection</div>
-    <div id="input-snapshot" style="font-size:11px; color:#ccc; font-family:monospace; white-space:pre-wrap; max-height:160px; overflow-y:auto; border:1px solid #333; border-radius:4px; padding:6px; background:#0c0c0c;">(nothing yet)</div>
+    <div id="input-fields">(waiting for the control list from service.rs...)</div>
   </div>
 </div>
 
@@ -763,6 +771,10 @@ function connectService() {
       applySemanticState(parsed.semanticState);
       return;
     }
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'knownControls')) {
+      buildInputFields(parsed.knownControls);
+      return;
+    }
     if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'inputSnapshot')) {
       applyInputSnapshot(parsed.inputSnapshot);
       return;
@@ -1084,18 +1096,59 @@ function applySemanticState(state) {
     `background: ${bgType}  |  header.titleBar: ${(header.titleBar || []).join('/')}  |  header.bigFont: ${header.bigFont || ''}  |  header.currentValue: ${header.currentValue || ''}  |  footer.tabs: ${(footer.tabs || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
 }
 
-// Rendered from `{"inputSnapshot": {"fader_1": {"kind":"Fader",...}, ...}}` --
-// one entry per control name last observed, sent once on connect (see the
-// #note text above this panel for the "not live yet" caveat). Each value is
-// an InputEvent straight from lib.rs's decode_cc, tagged by "kind" --
-// rendered generically here rather than special-cased per kind, since this
-// panel is deliberately just a raw view of what's decoded, not a UI.
-function describeInputEvent(name, ev) {
-  if (!ev || !ev.kind) return `${name}: ?`;
-  if (ev.kind === 'Fader') return `${name}: ${ev.value}/127 (${Math.round(ev.normalized * 100)}%)`;
-  if (ev.kind === 'Encoder') return `${name}: ${ev.delta > 0 ? '+' : ''}${ev.delta}`;
-  if (ev.kind === 'Button') return `${name}: ${ev.pressed ? 'pressed' : 'released'}`;
-  return `${name}: ${ev.value ?? ''} (unrecognized CC)`;
+// Built once from `{"knownControls": [{"cc":0,"name":"fader_1","kind":"Fader"},
+// ...]}` -- the fixed, complete field list (lib.rs's `known_input_controls()`,
+// not hand-duplicated here) sent once per connection since it never changes
+// at runtime. One field per control, always present, grouped by kind --
+// "just show ALL of them as fields... I do not care much for the log style".
+const inputFieldEls = {}; // name -> {root, valueEl}
+
+function buildInputFields(controls) {
+  const container = el('input-fields');
+  container.innerHTML = '';
+  for (const key in inputFieldEls) delete inputFieldEls[key];
+
+  const groups = { Fader: [], Encoder: [], Button: [], Unknown: [] };
+  (controls || []).forEach(c => (groups[c.kind] || groups.Unknown).push(c));
+
+  const groupLabels = { Fader: 'Faders', Encoder: 'Encoders', Button: 'Buttons', Unknown: 'Unrecognized' };
+  Object.keys(groupLabels).forEach(kind => {
+    const list = groups[kind];
+    if (list.length === 0) return;
+    const label = document.createElement('div');
+    label.className = 'input-group-label';
+    label.textContent = `${groupLabels[kind]} (${list.length})`;
+    container.appendChild(label);
+
+    const grid = document.createElement('div');
+    grid.className = 'input-group-grid';
+    list.sort((a, b) => a.cc - b.cc).forEach(c => {
+      const field = document.createElement('div');
+      field.className = 'input-field';
+      const nameEl = document.createElement('div');
+      nameEl.textContent = c.name;
+      const valueEl = document.createElement('div');
+      valueEl.className = 'iv';
+      valueEl.textContent = '—'; // em dash -- never observed yet
+      field.appendChild(nameEl);
+      field.appendChild(valueEl);
+      grid.appendChild(field);
+      inputFieldEls[c.name] = { root: field, valueEl };
+    });
+    container.appendChild(grid);
+  });
+}
+
+// Rendered from `{"inputSnapshot": {"fader_1": {"kind":"Fader",...}, ...}}`,
+// polled every 300ms -- updates each field BUILT ABOVE in place rather than
+// rebuilding the list, so a field that's never been touched keeps showing
+// its placeholder instead of disappearing/reappearing.
+function describeInputEvent(ev) {
+  if (!ev || !ev.kind) return { text: '?', pressed: false };
+  if (ev.kind === 'Fader') return { text: `${ev.value}`, pressed: false };
+  if (ev.kind === 'Encoder') return { text: `${ev.value ?? 0}`, pressed: false }; // accumulated position, see InputState
+  if (ev.kind === 'Button') return { text: ev.pressed ? 'ON' : 'off', pressed: !!ev.pressed };
+  return { text: `${ev.value ?? ''}`, pressed: false };
 }
 
 function applyInputSnapshot(snapshot) {
@@ -1103,11 +1156,14 @@ function applyInputSnapshot(snapshot) {
   el('input-updated').textContent = names.length === 0
     ? 'no input observed yet this connection'
     : `last poll reply: ${new Date().toLocaleTimeString()} (${names.length} control${names.length === 1 ? '' : 's'} seen)`;
-  if (names.length === 0) {
-    el('input-snapshot').textContent = '(nothing yet -- move a fader/knob or press a button)';
-    return;
-  }
-  el('input-snapshot').textContent = names.sort().map(n => describeInputEvent(n, snapshot[n])).join('\n');
+  names.forEach(name => {
+    const field = inputFieldEls[name];
+    if (!field) return; // a control reported that knownControls didn't list -- ignore rather than crash
+    const { text, pressed } = describeInputEvent(snapshot[name]);
+    field.valueEl.textContent = text;
+    field.root.classList.add('touched');
+    field.root.classList.toggle('pressed', pressed);
+  });
 }
 
 renderSimulator();

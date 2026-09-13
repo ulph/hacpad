@@ -274,6 +274,14 @@ code at all**. Partially closed this session:
 - **Buttons are decoded as bare press/release (127/0), not debounced or edge-detected** — a
   held button re-sends 127 repeatedly on some controls (not characterized here); nothing
   distinguishes "pressed" from "still pressed."
+- **`cc_kind`'s own ranges have a small gap**: CC 104 (`surface_status`) and 105
+  (`automation_write`) both have real names from `cc_name` but fall outside every range
+  `cc_kind` checks, so they decode as `InputEvent::Unknown` despite being named -- surfaced by
+  `known_input_controls()` (2 of 65 entries land in the UI's "Unrecognized" group). Not fixed
+  reflexively: whether they're genuinely buttons (127/0) has never been directly confirmed live
+  (see the `cc_name` comments' own hedging on both), so reclassifying them without that
+  confirmation would be exactly the kind of unverified assumption this project keeps correcting
+  itself on elsewhere.
 
 ## Open questions this model doesn't answer yet
 

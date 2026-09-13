@@ -923,7 +923,7 @@ pub fn find_in_port(inp: &MidiInput, needle: &str) -> Result<MidiInputPort, Box<
 // particular are sourced from the Bitwig driver's JS, not all individually
 // pressed-and-observed on this hardware).
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CcKind {
     Fader,
     Encoder,
@@ -1013,6 +1013,36 @@ pub fn cc_kind(cc: u8) -> CcKind {
         16..=23 | 80..=90 | 91..=103 | 106..=110 => CcKind::Button,
         _ => CcKind::Unknown,
     }
+}
+
+/// One entry in the canonical "which controls exist" list -- see
+/// `known_input_controls`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownControl {
+    pub cc: u8,
+    pub name: String,
+    pub kind: CcKind,
+}
+
+/// Every CC this project has assigned a real semantic name to (i.e. NOT
+/// `cc_name`'s `cc_N` catch-all) -- the single source of truth for "which
+/// controls exist," derived directly from `cc_name`/`cc_kind` rather than
+/// hand-duplicated a second time by any client. Used to render one fixed
+/// field per control ("just show ALL of them as fields... I do not care
+/// much for the log style") instead of a dynamic list that only grows as
+/// controls happen to get touched.
+pub fn known_input_controls() -> Vec<KnownControl> {
+    (0u8..=127)
+        .filter_map(|cc| {
+            let name = cc_name(cc);
+            if name.starts_with("cc_") {
+                None
+            } else {
+                Some(KnownControl { cc, name, kind: cc_kind(cc) })
+            }
+        })
+        .collect()
 }
 
 /// A decoded device-originated control input -- semantically what the
@@ -1427,5 +1457,17 @@ mod tests {
         assert_eq!(json["fader_1"]["value"], 42);
         assert_eq!(json["fader_1"]["lastEvent"]["kind"], "Fader");
         assert!(json.get("controls").is_none());
+    }
+
+    #[test]
+    fn known_input_controls_excludes_the_unnamed_catch_all_and_includes_confirmed_ones() {
+        let controls = known_input_controls();
+        assert!(controls.iter().all(|c| !c.name.starts_with("cc_")), "every entry must have a real name, not the cc_N fallback");
+        let names: Vec<&str> = controls.iter().map(|c| c.name.as_str()).collect();
+        for expected in ["fader_1", "fader_master", "pan_encoder_1", "param_encoder_1", "shift", "play", "jog_wheel"] {
+            assert!(names.contains(&expected), "expected {expected:?} in known_input_controls()");
+        }
+        // CC 12/13/15 etc. (truly unassigned) must NOT appear.
+        assert!(!controls.iter().any(|c| c.cc == 12));
     }
 }
