@@ -8,7 +8,7 @@ use std::error::Error;
 use std::sync::OnceLock;
 
 use midir::{MidiInput, MidiInputPort, MidiOutput, MidiOutputPort};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The confirmed protocol vocabulary (page templates, displayId fields, and
 /// their slot counts/descriptions) -- embedded at compile time from
@@ -241,7 +241,7 @@ pub fn write_title_bar(page_template: u8, segments: &[String]) -> Vec<u8> {
 /// enum; we've only visually distinguished 2 of the 9 on hardware (see
 /// "Twenty-fifth finding"), so the rest are kept as `Raw(n)` rather than
 /// guessed at.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PadState {
     Default,
     Lit, // confirmed red/pink tint on hardware
@@ -264,24 +264,37 @@ impl PadState {
 /// fields are exactly what that Background's Content schema actually holds,
 /// confirmed on hardware ("Tenth"/"Fifteenth"/"Sixteenth" findings) -- no
 /// page_template id or displayId number appears anywhere in this type.
-#[derive(Clone)]
+/// `#[serde(tag = "type")]`: the wire shape for e.g. `Mixer` is
+/// `{"type": "Mixer", "paramNames": [...], "paramValues": [...]}` -- this is
+/// what lets a WebSocket client send a `Background` directly as part of a
+/// semantic command (see service.rs's `SemanticCommand::SwitchBackground`)
+/// instead of the service needing a hand-maintained parallel DTO. Each
+/// variant gets its own `rename_all` (serde applies it per-variant, not
+/// automatically from the enum) so field names are camelCase on the wire,
+/// matching the rest of the JSON protocol (`titleBar`, `padState`, etc.).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum Background {
     /// 4x2 knob grid (the default page on connect).
+    #[serde(rename_all = "camelCase")]
     Mixer { param_names: [String; 8], param_values: [String; 8] },
     /// 8 faders split into two groups of 4; 16 labels, two stacked per fader.
     FaderSplit { labels: [String; 16] },
     /// 8 faders in one continuous row.
     FaderRow { labels: [String; 8] },
     /// 4x4 pad grid, rows A-D, all 16 pads individually labelable.
+    #[serde(rename_all = "camelCase")]
     PadView { pad_names: [String; 16], pad_states: [PadState; 16] },
     /// 3x4 pad grid, rows A-C only -- genuinely distinct from PadView, not
     /// just an unlabeled 4th row (Sixteenth finding).
+    #[serde(rename_all = "camelCase")]
     PadView3Row { pad_names: [String; 12], pad_states: [PadState; 12] },
     /// 1 fader + a vertical bulleted list, hard-capped at 5 visible entries.
     List { items: [String; 5] },
     /// Plain 2x4 button grid, no fader/knob widgets.
     Grid { labels: [String; 8] },
     /// `L:`/`R:` locator bars + a 2x4 grid beneath.
+    #[serde(rename_all = "camelCase")]
     TransportLauncher { loop_left: String, loop_right: String, labels: [String; 8] },
     /// Content-area widget never characterized -- only the (template-
     /// independent) bottom menu-button relabeling was ever tested against
@@ -341,12 +354,44 @@ pub struct DeviceState {
     last_title_bar: Vec<String>,
     popup_visible: bool,
     message_visible: bool,
+    // Last content handed to show_popup/show_message -- a SOFTWARE mirror
+    // for reporting back to a UI (see `snapshot()`), not a device read-back
+    // (none exists). Kept even while hidden; only *_visible says whether
+    // it's actually on screen right now.
+    last_popup_items: Vec<String>,
+    last_popup_highlight: Option<u8>,
+    last_message_text: Option<String>,
 }
 
 impl Default for DeviceState {
     fn default() -> Self {
-        DeviceState { last_background: None, last_title_bar: Vec::new(), popup_visible: false, message_visible: false }
+        DeviceState {
+            last_background: None,
+            last_title_bar: Vec::new(),
+            popup_visible: false,
+            message_visible: false,
+            last_popup_items: Vec::new(),
+            last_popup_highlight: None,
+            last_message_text: None,
+        }
     }
+}
+
+/// What `DeviceState` currently believes is showing -- for handing back to a
+/// client (e.g. right after it sends a semantic command, or on connect) so
+/// its UI can reflect the real in-memory model instead of re-deriving it.
+/// Software mirror only, per `DeviceState`'s own doc comment -- not a device
+/// read-back.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSnapshot {
+    pub background: Option<Background>,
+    pub title_bar: Vec<String>,
+    pub popup_visible: bool,
+    pub popup_items: Vec<String>,
+    pub popup_highlight: Option<u8>,
+    pub message_visible: bool,
+    pub message_text: Option<String>,
 }
 
 impl DeviceState {
@@ -356,6 +401,18 @@ impl DeviceState {
 
     pub fn message_visible(&self) -> bool {
         self.message_visible
+    }
+
+    pub fn snapshot(&self) -> DeviceSnapshot {
+        DeviceSnapshot {
+            background: self.last_background.clone(),
+            title_bar: self.last_title_bar.clone(),
+            popup_visible: self.popup_visible,
+            popup_items: self.last_popup_items.clone(),
+            popup_highlight: self.last_popup_highlight,
+            message_visible: self.message_visible,
+            message_text: self.last_message_text.clone(),
+        }
     }
 
     /// THE verb that changes which Background is active -- also the only
@@ -376,12 +433,14 @@ impl DeviceState {
     /// page_template=0 regardless, per `write_page_menu`'s doc comment).
     pub fn show_popup(&mut self, items: &[String]) -> Vec<u8> {
         self.popup_visible = true;
+        self.last_popup_items = items.to_vec();
         write_page_menu(items)
     }
 
     /// Highlight is separate from show/hide -- a plain CC, only meaningful
     /// while the popup is actually showing.
-    pub fn set_popup_highlight(&self, row: u8) -> [u8; 3] {
+    pub fn set_popup_highlight(&mut self, row: u8) -> [u8; 3] {
+        self.last_popup_highlight = Some(row);
         cc_message(CC_MENU_HIGHLIGHT, row)
     }
 
@@ -408,6 +467,7 @@ impl DeviceState {
     /// (Thirty-first finding) -- the two can coexist, for better or worse.
     pub fn show_message(&mut self, text: &str) -> Vec<u8> {
         self.message_visible = true;
+        self.last_message_text = Some(text.to_string());
         write_message(text)
     }
 

@@ -100,6 +100,9 @@
   #controls label { display: block; font-size: 11px; margin: 4px 0 2px; color: #aaa; }
   #controls input[type=text] { width: 100%; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #444; padding: 3px 5px; font-family: monospace; }
   #controls select { background: #222; color: #eee; border: 1px solid #444; padding: 3px; }
+  #controls textarea { width: 100%; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #444; padding: 3px 5px; font-family: monospace; font-size: 11px; resize: vertical; }
+  #controls button { background: #2a3a4a; color: #eee; border: 1px solid #456; border-radius: 3px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+  #controls button:hover { background: #345; }
   .row { display: flex; gap: 6px; }
   .row > div { flex: 1; }
   #note { font-size: 11px; color: #888; margin-top: 10px; max-width: 480px; }
@@ -322,7 +325,54 @@
 
     <div id="push-status" style="font-size:11px; color:#888; margin-bottom:2px;">not yet pushed</div>
     <div id="last-sent" style="font-size:10px; color:#666; margin-bottom:6px;">no sends yet</div>
-    <button id="full-sync-btn" type="button" style="margin-bottom:10px;">Send full state (bypass diff)</button>
+    <!-- Raw resync tool, kept for the raw perspective (see lib.rs/service.rs's
+         doc comments on the two being deliberately separate) -- no longer the
+         only way to force a clean overlay dismiss now that the semantic panel
+         below exists; that's the reliable path for show/hide (see its note). -->
+    <button id="full-sync-btn" type="button" style="margin-bottom:14px;">Send full state (bypass diff, raw only)</button>
+
+    <hr style="border-color:#333; margin:0 0 12px;">
+    <h3>Semantic commands</h3>
+    <div id="note">
+      A second envelope on the SAME socket -- <code>{"semantic": {"cmd": ..., ...}}</code>
+      instead of raw fields (service.rs's top doc comment). Not a different capability,
+      just a convenient way to COMPOSE the same raw writes: `DeviceState` (lib.rs) already
+      knows how to correctly restore whatever Background was last switched to here, which is
+      exactly what Hide Popup/Hide Message need to actually work (unlike the raw
+      message/popup checkboxes above, which only ever send-or-don't-send and can't force the
+      real template-switch side effect that dismissing needs -- see write_page_menu/
+      write_message's doc comments in lib.rs). This panel tracks its OWN "last background"
+      state, independent of the raw panel above -- click Switch Background here at least once
+      before Hide Popup/Hide Message, same sequence proven live by verb_test.rs's overlaytest.
+    </div>
+
+    <fieldset>
+      <label>Background type</label>
+      <select id="sem-bg-type"></select>
+      <label>Fields (JSON -- matches the Rust variant's own shape, camelCase)</label>
+      <textarea id="sem-bg-fields" rows="3"></textarea>
+      <div style="font-size:10px; color:#666; margin:4px 0 8px;">title_bar reuses the displayId 1 fields above (in-tb1/in-tb2/in-tb3)</div>
+      <button id="sem-switch-btn" type="button">Switch Background</button>
+    </fieldset>
+
+    <fieldset>
+      <label>Popup (displayId 8) -- reuses in-menuitems / in-menuhighlight above</label>
+      <div class="row" style="gap:6px;">
+        <button id="sem-popup-show-btn" type="button">Show Popup</button>
+        <button id="sem-popup-highlight-btn" type="button">Set Highlight</button>
+        <button id="sem-popup-hide-btn" type="button">Hide Popup</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label>Message (pageTemplate 1) -- reuses in-message-overlay above</label>
+      <div class="row" style="gap:6px;">
+        <button id="sem-message-show-btn" type="button">Show Message</button>
+        <button id="sem-message-hide-btn" type="button">Hide Message</button>
+      </div>
+    </fieldset>
+
+    <div id="semantic-status" style="font-size:11px; color:#888; margin-bottom:6px;">no semantic command sent yet</div>
   </div>
 </div>
 
@@ -654,10 +704,28 @@ function connectService() {
   });
   ws.addEventListener('error', () => ws.close());
   ws.addEventListener('message', (ev) => {
+    let parsed;
     try {
-      applyScreenPush(JSON.parse(ev.data), !syncedThisConnection);
-      syncedThisConnection = true;
-    } catch (e) { /* ignore malformed */ }
+      parsed = JSON.parse(ev.data);
+    } catch (e) {
+      return; // ignore malformed
+    }
+    // Three message shapes share this socket now (service.rs's top doc
+    // comment): the semantic model's own state, the device-input snapshot,
+    // and (falling through below) the plain raw screen-state object.
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'semanticState')) {
+      applySemanticState(parsed.semanticState);
+      return;
+    }
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'inputSnapshot')) {
+      // Device -> host values exist now (service.rs's permanent input
+      // listener, lib.rs's decode_cc) but this page has no UI for them yet --
+      // deliberately ignored here rather than mis-fed through
+      // applyScreenPush, which only knows the raw screen-state shape.
+      return;
+    }
+    applyScreenPush(parsed, !syncedThisConnection);
+    syncedThisConnection = true;
   });
 }
 connectService();
@@ -860,6 +928,96 @@ el('full-sync-btn').addEventListener('click', sendFullState);
 // which already re-renders and pushes normally.
 el('chk-message-enabled').addEventListener('change', (e) => { if (!e.target.checked) dismissOverlay(); });
 el('chk-popup-enabled').addEventListener('change', (e) => { if (!e.target.checked) dismissOverlay(); });
+
+// --- Semantic commands ------------------------------------------------
+// The other envelope shape service.rs accepts on this same socket --
+// {"semantic": {"cmd": ..., ...}} -- see the #note text above the "Semantic
+// commands" fieldset for why this exists alongside, not instead of, the raw
+// fields above. `DeviceState` (lib.rs) does the actual composing; this code
+// just builds the JSON that names which verb and hands over whatever the
+// (shared, reused) raw input fields currently hold.
+function sendSemantic(cmd) {
+  if (!wsReady) return;
+  ws.send(JSON.stringify({ semantic: cmd }));
+}
+
+// One placeholder field-shape per Background variant, so picking a type
+// doesn't leave the user guessing the Rust struct's exact field names --
+// purely a textarea pre-fill, freely editable before "Switch Background" is
+// actually clicked. Field names are camelCase to match `Background`'s
+// `#[serde(rename_all = "camelCase")]` wire shape (lib.rs).
+const BACKGROUND_DEFAULTS = {
+  Mixer: { paramNames: ['CUT', 'RES', 'ATK', 'DEC', 'SUS', 'REL', 'DRV', 'MIX'], paramValues: ['1.2k', '45%', '12ms', '80ms', '0dB', '200ms', '30%', 'wet'] },
+  FaderSplit: { labels: Array.from({ length: 16 }, (_, i) => `X${i + 1}`) },
+  FaderRow: { labels: Array.from({ length: 8 }, (_, i) => `F${i + 1}`) },
+  PadView: { padNames: Array.from({ length: 16 }, (_, i) => `P${i + 1}`), padStates: Array.from({ length: 16 }, () => 'Default') },
+  PadView3Row: { padNames: Array.from({ length: 12 }, (_, i) => `P${i + 1}`), padStates: Array.from({ length: 12 }, () => 'Default') },
+  List: { items: ['I1', 'I2', 'I3', 'I4', 'I5'] },
+  Grid: { labels: Array.from({ length: 8 }, (_, i) => `G${i + 1}`) },
+  TransportLauncher: { loopLeft: 'L:1.1.1', loopRight: 'R:5.1.1', labels: Array.from({ length: 8 }, (_, i) => `T${i + 1}`) },
+  Menu: {}, // unit variant -- no content fields characterized yet (see lib.rs)
+  ListHighlighted: { items: ['I1', 'I2', 'I3'], highlighted: 0 },
+  SceneButtons: { labels: ['S1', 'S2', 'S3', 'S4'] },
+  BrowserList: { items: ['B1', 'B2', 'B3'] },
+  Reset: {}, // unit variant -- confirmed content-write no-op
+  Blank: {}, // unit variant -- deliberately empty content area
+};
+
+(function buildBackgroundTypeSelect() {
+  const sel = el('sem-bg-type');
+  Object.keys(BACKGROUND_DEFAULTS).forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.value = 'Mixer';
+  el('sem-bg-fields').value = JSON.stringify(BACKGROUND_DEFAULTS.Mixer);
+})();
+el('sem-bg-type').addEventListener('change', () => {
+  el('sem-bg-fields').value = JSON.stringify(BACKGROUND_DEFAULTS[el('sem-bg-type').value] || {});
+});
+
+el('sem-switch-btn').addEventListener('click', () => {
+  let fields;
+  try {
+    fields = JSON.parse(el('sem-bg-fields').value || '{}');
+  } catch (e) {
+    alert(`Fields JSON doesn't parse: ${e.message}`);
+    return;
+  }
+  const background = Object.assign({ type: el('sem-bg-type').value }, fields);
+  const titleBar = [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value];
+  sendSemantic({ cmd: 'switchBackground', background, titleBar });
+});
+
+// Popup/message actions reuse the SAME raw input fields as the checkboxes
+// above (in-menuitems/in-menuhighlight/in-message-overlay) -- one set of
+// fields, two ways to send them (see the #note text).
+el('sem-popup-show-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'showPopup', items: csv(el('in-menuitems').value).filter(Boolean) });
+});
+el('sem-popup-highlight-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'setPopupHighlight', row: parseInt(el('in-menuhighlight').value, 10) || 0 });
+});
+el('sem-popup-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hidePopup' }));
+
+el('sem-message-show-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'showMessage', text: el('in-message-overlay').value });
+});
+el('sem-message-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hideMessage' }));
+
+// Rendered from `{"semanticState": ...}` messages -- see DeviceState::snapshot()
+// in lib.rs. Software mirror only (no device read-back exists), same honesty
+// as the Rust side.
+function applySemanticState(state) {
+  if (!state) return;
+  const bgType = state.background ? state.background.type : '(none switched yet)';
+  const popup = state.popupVisible ? `visible (${(state.popupItems || []).length} items, highlight ${state.popupHighlight ?? '-'})` : 'hidden';
+  const message = state.messageVisible ? `visible ("${state.messageText || ''}")` : 'hidden';
+  el('semantic-status').textContent =
+    `background: ${bgType}  |  titleBar: ${(state.titleBar || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
+}
 
 renderSimulator();
 </script>

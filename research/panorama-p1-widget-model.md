@@ -109,6 +109,22 @@ to the Thirty-first finding). `hide_message()` correctly restored the full Mixer
 (all 8 knobs, names and values both correct) with the popup also gone, matching the model
 exactly.
 
+**Root-caused a real bug this session**: the webcam-viewer's *raw* dismiss path
+(`dismissOverlay()` in index.html) only ever re-sent `title_bar` -- never a Background's own
+content field -- so unticking the popup/message checkboxes visibly did nothing. Exactly the
+"page_template change is a silent no-op unless piggybacked on a real content write" behavior
+this section already documented; `DeviceState` never had this problem because
+`switch_background_messages` always sends both. `DeviceState` was proven correct in
+`verb_test` but had never actually been reachable from the WebSocket bridge until this
+session -- `service.rs` now holds one and exposes it via a second, additive
+`{"semantic": {...}}` envelope on the same socket (raw `ScreenUpdate` still works unchanged,
+by deliberate choice -- see the file's own top doc comment: "we lose something if not
+allowing the raw perspective"). index.html's new "Semantic commands" panel calls this for
+Show/Hide Popup and Show/Hide Message, and confirmed correct end-to-end this session
+(scripted WS client, real hardware): switchBackground → showPopup → hidePopup (restores
+Mixer, clears popup) → showMessage → hideMessage (restores Mixer again). The raw checkboxes
+above are intentionally left with their old, honest limitation rather than papered over.
+
 ## Interaction matrix — Background × Overlay/Message
 
 Confidence key: **D** = directly tested and photographed. **I** = not directly tested for this

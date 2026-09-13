@@ -48,6 +48,24 @@
 //! closes "the service now knows about input at all", not "input is
 //! real-time over the wire yet".
 //!
+//! **Two ways to talk to this service, both accepted on the same socket**:
+//! the raw `ScreenUpdate` shape above (a direct, uncomposed field write --
+//! "raw perspective": you get exactly the SysEx writes you asked for, with
+//! no memory of what was shown before, which is also why dismissing an
+//! overlay by re-sending empty fields is a confirmed no-op -- see
+//! `write_page_menu`/`write_message`'s doc comments in lib.rs), and a
+//! `{"semantic": {"cmd": "...", ...}}` envelope carrying one of lib.rs's
+//! `DeviceState` verbs (`switchBackground`/`showPopup`/`setPopupHighlight`/
+//! `hidePopup`/`showMessage`/`hideMessage`). A semantic command is NOT a
+//! different capability, just a convenient way to COMPOSE the same raw
+//! writes -- `DeviceState` already knows how to correctly restore whatever
+//! Background was really active, which is exactly the SysEx sequence a
+//! human would otherwise have to construct by hand via the raw path to get
+//! a working dismiss. Every semantic command gets a `{"semanticState": {...
+//! DeviceSnapshot}}` reply on the SAME socket right after it's applied, so
+//! the sender can immediately show the true post-command state without
+//! guessing -- see `DeviceState::snapshot()` in lib.rs.
+//!
 //! Usage:
 //!     cargo run --bin service            # listens on ws://0.0.0.0:8091
 
@@ -148,6 +166,23 @@ fn default_state() -> ScreenUpdate {
     }
 }
 
+/// The `{"semantic": {...}}` envelope's payload -- one `DeviceState` verb per
+/// variant. `#[serde(tag = "cmd", rename_all = "camelCase")]` makes the wire
+/// shape `{"cmd": "switchBackground", "background": {...}, "titleBar": [...]}`
+/// etc., matching the rest of this protocol's camelCase convention.
+#[derive(Deserialize)]
+#[serde(tag = "cmd", rename_all = "camelCase")]
+enum SemanticCommand {
+    #[serde(rename_all = "camelCase")]
+    SwitchBackground { background: Background, title_bar: Vec<String> },
+    ShowPopup { items: Vec<String> },
+    #[serde(rename_all = "camelCase")]
+    SetPopupHighlight { row: u8 },
+    HidePopup,
+    ShowMessage { text: String },
+    HideMessage,
+}
+
 struct Device {
     default_conn: MidiOutputConnection,
     #[allow(dead_code)] // kept open for the session; init already sent through it
@@ -159,6 +194,12 @@ struct Device {
     /// that's still a real improvement over assuming it silently worked
     /// (see the widget-model doc's "no error/rejection modeling" gap).
     session_verified: bool,
+    /// The semantic model (lib.rs) -- used ONLY by `apply_semantic`, never
+    /// touched by the raw `apply()` path below. The two can drift apart from
+    /// each other (a raw field write doesn't update this), which is expected:
+    /// they're deliberately two independent perspectives on the same device,
+    /// not one canonical source of truth forcing the other to stay in sync.
+    device_state: DeviceState,
 }
 
 impl Device {
@@ -218,7 +259,42 @@ impl Device {
 
         thread::sleep(Duration::from_millis(200));
 
-        Ok(Self { default_conn, port1_conn, session_verified })
+        Ok(Self { default_conn, port1_conn, session_verified, device_state: DeviceState::default() })
+    }
+
+    /// Applies one semantic verb by delegating to `DeviceState` (lib.rs) for
+    /// the actual composition, then sending whatever raw messages it hands
+    /// back -- this function does no protocol reasoning of its own, it's
+    /// purely "call the right DeviceState method, send the bytes it returns."
+    fn apply_semantic(&mut self, cmd: SemanticCommand) -> Result<(), Box<dyn Error>> {
+        match cmd {
+            SemanticCommand::SwitchBackground { background, title_bar } => {
+                for msg in self.device_state.switch_background(background, title_bar) {
+                    self.default_conn.send(&msg)?;
+                }
+            }
+            SemanticCommand::ShowPopup { items } => {
+                self.default_conn.send(&self.device_state.show_popup(&items))?;
+            }
+            SemanticCommand::SetPopupHighlight { row } => {
+                let msg = self.device_state.set_popup_highlight(row);
+                self.default_conn.send(&msg)?;
+            }
+            SemanticCommand::HidePopup => {
+                for msg in self.device_state.hide_popup() {
+                    self.default_conn.send(&msg)?;
+                }
+            }
+            SemanticCommand::ShowMessage { text } => {
+                self.default_conn.send(&self.device_state.show_message(&text))?;
+            }
+            SemanticCommand::HideMessage => {
+                for msg in self.device_state.hide_message() {
+                    self.default_conn.send(&msg)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn apply(&mut self, update: &ScreenUpdate) -> Result<(), Box<dyn Error>> {
@@ -373,6 +449,16 @@ fn handle_client(
             let _ = socket.send(Message::Text(text.into()));
         }
     }
+    // The semantic model's own view, independent of `last_state` above (see
+    // Device.device_state's doc comment: the two are separate perspectives,
+    // not reconciled into each other) -- so a client that speaks semantic
+    // commands starts from the real current DeviceState, not from nothing.
+    {
+        let snapshot = device.lock().unwrap().device_state.snapshot();
+        if let Ok(text) = serde_json::to_string(&serde_json::json!({ "semanticState": snapshot })) {
+            let _ = socket.send(Message::Text(text.into()));
+        }
+    }
 
     loop {
         let msg = match socket.read() {
@@ -384,7 +470,45 @@ fn handle_client(
             Message::Close(_) => break,
             _ => continue,
         };
-        let update: ScreenUpdate = match serde_json::from_str(&text) {
+
+        // Two shapes accepted on the same socket -- see this file's top doc
+        // comment. A `"semantic"` key routes to DeviceState; anything else
+        // falls through to the raw, uncomposed ScreenUpdate path unchanged.
+        let parsed: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("bad JSON from client: {e}");
+                continue;
+            }
+        };
+        if let Some(semantic) = parsed.get("semantic") {
+            let cmd: SemanticCommand = match serde_json::from_value(semantic.clone()) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("bad semantic command JSON: {e}");
+                    continue;
+                }
+            };
+            let snapshot = {
+                let mut dev = device.lock().unwrap();
+                if let Err(e) = dev.apply_semantic(cmd) {
+                    eprintln!("failed to write semantic command to device: {e}");
+                    continue;
+                }
+                dev.device_state.snapshot()
+            };
+            // Echo the resulting state back on THIS socket right away -- not
+            // a broadcast to other clients (no writer channel for that yet,
+            // same limitation as the raw path), but enough for the sender's
+            // own UI to reflect ground truth instead of assuming its request
+            // landed the way it hoped.
+            if let Ok(text) = serde_json::to_string(&serde_json::json!({ "semanticState": snapshot })) {
+                let _ = socket.send(Message::Text(text.into()));
+            }
+            continue;
+        }
+
+        let update: ScreenUpdate = match serde_json::from_value(parsed.clone()) {
             Ok(u) => u,
             Err(e) => {
                 eprintln!("bad screen-update JSON: {e}");
@@ -398,7 +522,7 @@ fn handle_client(
                 continue;
             }
         }
-        if let Ok(serde_json::Value::Object(incoming)) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let serde_json::Value::Object(incoming) = parsed {
             let mut state = last_state.lock().unwrap();
             for (k, v) in incoming {
                 state.insert(k, v);
