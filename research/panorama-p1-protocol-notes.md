@@ -1778,6 +1778,54 @@ CCs (25, 30, 31) were confirmed to land there. Worth another pass looking specif
 using a computed/indexed CC argument (e.g. `CC[base+i]`) rather than a literal `CC.<ident>`, which this
 grep pattern would not have caught.
 
+### Thirty-fourth finding: chasing the status-strip mutex directly — a real session-invalidation bug found, SurfaceStatus's value ruled out, position 1/4 mutex confirmed
+
+Prompted directly ("StatusN seems mutually exclusive??" / "find a way to control the LED status of the
+statusN, either individually or as a mutex"). Found the `SURFACE={...}` enum in source: a genuine
+4-value enum (0-3), consumed by a function that sends one of 4 different `0x09`-family lifecycle SysEx
+payloads depending on the value, guarded by `if(SurfaceStatus!==a)` -- exactly matching "one state
+variable, mutually exclusive" in shape. Two of its 4 payloads are byte-for-byte our own already-known
+`EXIT_1` (state 0) and `INIT_2` (state 1) constants.
+
+**Tested directly on hardware** (raw sends, bypassing the driver's own mk2/nektarine flag guard so all
+4 payloads could be tried regardless): all 4 `SurfaceStatus` payloads (0/1/2/3) produced the **same**
+visual result -- lighting the **rightmost** of the 4 status LEDs (call it Status4) every time, not four
+different positions. **The "one CC/value selects which position" hypothesis is ruled out** for this
+mechanism specifically.
+
+**However, a real, reproducible mutex WAS found**: sending any `0x09`-family lifecycle SysEx lights
+Status4 **and turns off Status1** (the CC-99-driven LED from the Thirtieth finding) -- confirmed by
+directly comparing before/after photos. So positions 1 and 4 genuinely are mutually exclusive, just not
+via SurfaceStatus's *value* -- rather, CC 99 (a plain CC) and the `0x09` SysEx family are two different
+mechanisms that happen to share one physical indicator "slot" between them, and whichever fires last
+wins. Positions 2 and 3 remain completely unexplained -- none of CC 25/30/31/13, nor any of the 4
+SurfaceStatus payloads, produced them.
+
+**Bigger discovery made along the way -- a genuine session-invalidation behavior, not a bug in our
+tooling**: sending an EXIT-shaped SysEx (either literally, via `SurfaceStatus`'s state-0 payload, or as
+the normal tail end of any `msg_test` invocation without `--persist`) puts the device into a state where
+it **silently ignores subsequent writes, including message-mode**, until a fresh INIT sequence
+(`INIT_LINUX_ONLY` + `INIT_1` + `INIT_2`) is sent again. Confirmed directly: a raw "hacpad" write sent
+with no prior init did nothing; the identical bytes preceded by a fresh init sequence worked
+immediately and persistently. This explains an apparent "webserver control seems dead" symptom
+encountered mid-session -- the long-running `service` process's one-time startup init had been
+invalidated by an EXIT-shaped payload sent from a separate, concurrent test script, and `service` has no
+logic to detect that and re-init (a real gap, see Open threads below). Recovered by restarting `service`
+(which re-runs its init sequence at startup) -- also cleared the stuck Status4 LED as a side effect,
+confirming that LED's state resets along with a fresh init too.
+
+**Also newly observed**: the device replies to our lifecycle SysEx with its own unsolicited SysEx --
+same shape, but manufacturer sub-id `7F 02` instead of our `7F 01` (device-to-host vs host-to-device),
+and a different trailing checksum byte, e.g. we send
+`F0 00 01 77 7F 01 09 03 00 00 01 3E 34 F7` and the device replies
+`F0 00 01 77 7F 02 09 03 00 00 01 3E 33 F7`. A real ACK/reply protocol, partially answering checklist
+item 9 ("unsolicited device-originated SysEx") -- not further characterized (do we need to reply to it?
+does ignoring it contribute to the session-invalidation behavior above?).
+
+**Open threads**: positions 2/3 of the status strip still unfound (candidates tried and ruled out: CC
+13/25/30/31, all 4 SurfaceStatus payloads); whether `service.rs` should detect a silently-ignored write
+and auto-recover by re-sending init is an open design question, not yet implemented.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical

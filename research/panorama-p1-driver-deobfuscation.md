@@ -108,6 +108,8 @@ hash-style identifiers. **317 distinct such identifiers** counted (`grep -oE '\b
 | `Z8104DAF843F74473C` / `Z8104EC9663F735F63` / `Z8104F404F3F72FCF8` | **CC 100/101/102 — browser/patch-menu "cancel" variants** (`gBrowserOpen=false` + varying `setActiveDisplayPage`/`SurfaceStatus` effects) | not individually distinguished as specific physical buttons yet |
 | `Z8106175F93F60CC7D` | **CC 104 — `SurfaceStatus`/`SURFACE.connected` related** | plausibly not a normal user button |
 | `Z81044EA5E3F7D74A7` | **CC 105 — `transport.toggleWriteArrangerAutomation()`, unconditional** | likely the actual button whose LED is CC 29 |
+| `SURFACE` enum: `Z81097B0C23F2A6973:0, Z8109632CF3F2B6AD5:1, Z81095CB963F2C7989:2, Z8109456B33F2DD007:3` | 4-value connection-state enum, consumed by `Z811220F8E3E9FC87D(a)` (guarded `if(SurfaceStatus!==a)`) which sends one of 4 `0x09`-family lifecycle SysEx payloads per value (0=our `EXIT_1`, 1=our `INIT_2`) | "Thirty-fourth finding": all 4 payloads tested live, all produce the SAME visual result (lights the rightmost of the 4 status LEDs, "Status4") -- does NOT select among 4 positions as the enum's shape suggested. Real mutex found instead: any of these payloads lights Status4 and turns off Status1 (CC 99) |
+| `Z811220F8E3E9FC87D` | the `SurfaceStatus` setter function itself (see above) | candidate name: `setSurfaceStatus` |
 
 ## Open threads / next steps
 
