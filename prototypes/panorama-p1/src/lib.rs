@@ -344,38 +344,46 @@ impl Background {
 
     /// Every variant's own fields, mapped onto the four Body-layer writes
     /// (displayId 6/7/0/5 -- `ctrl_element_name`/`ctrl_element_value`/
-    /// `pad_state`/`page_labels`). Unused slots default empty. Direct
-    /// instruction after this still not working reliably from the browser:
-    /// stop hand-picking which 1-2 fields "should" matter per variant and
-    /// always transmit all four Body fields on every switch instead --
-    /// see `switch_background_messages`.
+    /// `pad_state`/`page_labels`). `None` means this variant doesn't define
+    /// that field AT ALL -- nullable, per protocol.json's own
+    /// `persists_across_template_switch` facts: `ctrl_element_name` (6) is
+    /// CONFIRMED to auto-clear on a genuine template switch (Fourteenth
+    /// finding) without us sending anything, so a variant that doesn't use
+    /// it can just omit the write rather than force a blank one. (The other
+    /// three Body ids are `null`/unconfirmed there -- assumed to behave the
+    /// same by analogy, not independently proven; re-verify with the
+    /// webcam if that assumption ever turns out wrong, same as every other
+    /// finding in this file.) Chrome (title_bar/big_font/current_value/
+    /// tabs) is the opposite case -- confirmed STICKY (`true`, survives a
+    /// switch untouched), which is exactly why those four are unconditional
+    /// in `full_redraw` rather than nullable like these.
     fn body_fields(&self) -> BodyFields {
         let mut f = BodyFields::default();
         match self {
             Background::Mixer { param_names, param_values } => {
-                f.names = param_names.to_vec();
-                f.values = param_values.to_vec();
+                f.names = Some(param_names.to_vec());
+                f.values = Some(param_values.to_vec());
             }
-            Background::FaderSplit { labels } => f.names = labels.to_vec(),
-            Background::FaderRow { labels } => f.names = labels.to_vec(),
-            Background::Grid { labels } => f.names = labels.to_vec(),
+            Background::FaderSplit { labels } => f.names = Some(labels.to_vec()),
+            Background::FaderRow { labels } => f.names = Some(labels.to_vec()),
+            Background::Grid { labels } => f.names = Some(labels.to_vec()),
             Background::PadView { pad_names, pad_states } => {
-                f.names = pad_names.to_vec();
-                f.pad_state = pad_states.iter().map(|s| s.as_byte()).collect();
+                f.names = Some(pad_names.to_vec());
+                f.pad_state = Some(pad_states.iter().map(|s| s.as_byte()).collect());
             }
             Background::PadView3Row { pad_names, pad_states } => {
-                f.names = pad_names.to_vec();
-                f.pad_state = pad_states.iter().map(|s| s.as_byte()).collect();
+                f.names = Some(pad_names.to_vec());
+                f.pad_state = Some(pad_states.iter().map(|s| s.as_byte()).collect());
             }
-            Background::List { items } => f.names = items.to_vec(),
+            Background::List { items } => f.names = Some(items.to_vec()),
             Background::TransportLauncher { loop_left, loop_right, labels } => {
-                f.page_labels = vec![loop_left.clone(), loop_right.clone()];
-                f.names = labels.to_vec();
+                f.page_labels = Some(vec![loop_left.clone(), loop_right.clone()]);
+                f.names = Some(labels.to_vec());
             }
             Background::Menu | Background::Reset | Background::Blank => {}
-            Background::ListHighlighted { items, .. } => f.names = items.clone(),
-            Background::SceneButtons { labels } => f.names = labels.to_vec(),
-            Background::BrowserList { items } => f.names = items.clone(),
+            Background::ListHighlighted { items, .. } => f.names = Some(items.clone()),
+            Background::SceneButtons { labels } => f.names = Some(labels.to_vec()),
+            Background::BrowserList { items } => f.names = Some(items.clone()),
         }
         f
     }
@@ -383,13 +391,16 @@ impl Background {
 
 /// The four Body-layer writes, independent of which fields a given
 /// `Background` variant's own typed schema happens to expose -- see
-/// `Background::body_fields`.
+/// `Background::body_fields`. Each is `Option`: `None` means "this variant
+/// doesn't define this field, omit the write entirely" (nullable/hidden-if-
+/// omitted), not "send an empty one" -- see `body_fields`'s doc comment for
+/// why that's safe here specifically.
 #[derive(Default)]
 struct BodyFields {
-    names: Vec<String>,
-    values: Vec<String>,
-    pad_state: Vec<u8>,
-    page_labels: Vec<String>,
+    names: Option<Vec<String>>,
+    values: Option<Vec<String>>,
+    pad_state: Option<Vec<u8>>,
+    page_labels: Option<Vec<String>>,
 }
 
 /// Tracks what's actually been sent, so `hide_popup`/`hide_message` can
@@ -424,6 +435,18 @@ pub struct DeviceState {
     // (`switch_background`/`resend_body`), same "don't leave a field
     // orphaned" reasoning as the Body blast.
     last_tabs: Vec<String>,
+    // The other two Header fields (displayId 2/3, big_font/current_value --
+    // title_bar/displayId 1 was already always resent). Generalizing the
+    // Footer lesson directly ("if the popup spans over the whole screen,
+    // you need to set ALL displayIds and templates so that it redraws
+    // those parts of the screen") rather than waiting for a third bug
+    // report to notice these two are just as orphaned as tabs was.
+    // write_bigfont/write_current_value don't route through
+    // indexed_entries' empty-string filter (see their doc comments), so an
+    // empty default genuinely clears them -- no " " placeholder trick
+    // needed here, unlike `last_tabs`.
+    last_bigfont: String,
+    last_current_value: String,
 }
 
 impl Default for DeviceState {
@@ -441,6 +464,8 @@ impl Default for DeviceState {
             // we don't know what a caller wants shown here yet, and
             // leaving stale text is worse than genuinely blank.
             last_tabs: vec![" ".to_string(); 5],
+            last_bigfont: String::new(),
+            last_current_value: String::new(),
         }
     }
 }
@@ -456,6 +481,8 @@ pub struct DeviceSnapshot {
     pub background: Option<Background>,
     pub title_bar: Vec<String>,
     pub tabs: Vec<String>,
+    pub bigfont: String,
+    pub current_value: String,
     pub popup_visible: bool,
     pub popup_items: Vec<String>,
     pub popup_highlight: Option<u8>,
@@ -477,6 +504,8 @@ impl DeviceState {
             background: self.last_background.clone(),
             title_bar: self.last_title_bar.clone(),
             tabs: self.last_tabs.clone(),
+            bigfont: self.last_bigfont.clone(),
+            current_value: self.last_current_value.clone(),
             popup_visible: self.popup_visible,
             popup_items: self.last_popup_items.clone(),
             popup_highlight: self.last_popup_highlight,
@@ -490,12 +519,32 @@ impl DeviceState {
     /// hidden here (a real switch clears them as a side effect, confirmed
     /// -- Thirteenth/Thirty-first findings).
     pub fn switch_background(&mut self, bg: Background, title_bar: Vec<String>) -> Vec<Vec<u8>> {
-        let mut msgs = switch_background_messages(&bg, &title_bar);
-        msgs.push(write_tabs(bg.page_template(), &self.last_tabs));
+        let msgs = self.full_redraw(&bg, &title_bar);
         self.last_background = Some(bg);
         self.last_title_bar = title_bar;
         self.popup_visible = false;
         self.message_visible = false;
+        msgs
+    }
+
+    /// The complete "resting" screen state for one Background -- every
+    /// displayId that's visible when NO overlay is showing (Header's
+    /// title_bar/big_font/current_value, all four Body writes via
+    /// `switch_background_messages`, and Footer's tabs). An overlay (popup
+    /// or message) can cover any part of the screen, so tearing one down
+    /// cleanly means redrawing ALL of these, not a hand-picked subset --
+    /// direct instruction, after Body alone (Thirty-eighth finding) and then
+    /// Body+Footer (same finding, follow-up) each turned out to still leave
+    /// something orphaned. Used by both `switch_background` (a real,
+    /// caller-requested change) and `resend_body` (restoring after an
+    /// overlay, which additionally bounces through a different template
+    /// first -- see that method's own doc comment).
+    fn full_redraw(&self, bg: &Background, title_bar: &[String]) -> Vec<Vec<u8>> {
+        let t = bg.page_template();
+        let mut msgs = switch_background_messages(bg, title_bar);
+        msgs.push(write_tabs(t, &self.last_tabs));
+        msgs.push(write_bigfont(t, &self.last_bigfont));
+        msgs.push(write_current_value(t, &self.last_current_value));
         msgs
     }
 
@@ -509,6 +558,24 @@ impl DeviceState {
         let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
         let msg = write_tabs(t, &tabs);
         self.last_tabs = tabs;
+        msg
+    }
+
+    /// Same idea as `set_tabs`, for the other two Header fields (displayId
+    /// 2/3) -- generalizing the same "an overlay can cover any part of the
+    /// screen, so recovery must redraw every displayId" lesson tabs taught,
+    /// instead of waiting for a bug report against these two specifically.
+    pub fn set_bigfont(&mut self, text: String) -> Vec<u8> {
+        let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
+        let msg = write_bigfont(t, &text);
+        self.last_bigfont = text;
+        msg
+    }
+
+    pub fn set_current_value(&mut self, text: String) -> Vec<u8> {
+        let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
+        let msg = write_current_value(t, &text);
+        self.last_current_value = text;
         msg
     }
 
@@ -574,10 +641,8 @@ impl DeviceState {
                 } else {
                     Background::Blank
                 };
-                let mut msgs = switch_background_messages(&bounce, &self.last_title_bar);
-                msgs.push(write_tabs(bounce.page_template(), &self.last_tabs));
-                msgs.extend(switch_background_messages(bg, &self.last_title_bar));
-                msgs.push(write_tabs(bg.page_template(), &self.last_tabs));
+                let mut msgs = self.full_redraw(&bounce, &self.last_title_bar);
+                msgs.extend(self.full_redraw(bg, &self.last_title_bar));
                 msgs
             }
             None => Vec::new(),
@@ -657,21 +722,26 @@ impl DeviceState {
 pub fn switch_background_messages(bg: &Background, title_bar: &[String]) -> Vec<Vec<u8>> {
     let t = bg.page_template();
     let body = bg.body_fields();
-    // ALL FOUR Body writes, every time -- direct instruction, after two live
-    // reports that show/hide was still broken from the browser despite
-    // scripted WS tests passing: stop hand-picking the 1-2 fields a given
-    // variant's typed schema "should" need and always transmit the complete
-    // Body layer (names/values/pad_state/page_labels) on every switch,
-    // whether or not this specific variant uses each one. A variant with
-    // nothing for a slot sends an empty write for it rather than omitting
-    // the call entirely.
-    vec![
-        write_title_bar(t, title_bar),
-        write_names(t, &body.names),
-        write_values(t, &body.values),
-        write_pad_state(t, &body.pad_state),
-        write_page_labels(t, &body.page_labels),
-    ]
+    // Body fields are nullable (see `BodyFields`'s doc comment): a variant
+    // that doesn't define a given field omits its write entirely, trusting
+    // the device's own confirmed auto-clear-on-genuine-switch behavior
+    // (protocol.json: ctrl_element_name is confirmed `persists_across_
+    // template_switch: false`; the other three are assumed the same by
+    // analogy) instead of forcing an empty write ourselves.
+    let mut msgs = vec![write_title_bar(t, title_bar)];
+    if let Some(names) = &body.names {
+        msgs.push(write_names(t, names));
+    }
+    if let Some(values) = &body.values {
+        msgs.push(write_values(t, values));
+    }
+    if let Some(pad_state) = &body.pad_state {
+        msgs.push(write_pad_state(t, pad_state));
+    }
+    if let Some(page_labels) = &body.page_labels {
+        msgs.push(write_page_labels(t, page_labels));
+    }
+    msgs
 }
 
 /// Bottom menu-button row -- confirmed to work with any template, not just
@@ -1040,21 +1110,33 @@ mod tests {
     /// this for a variant with a rich Body schema (`Mixer`) AND for one with
     /// NONE at all (`Menu`) -- the latter previously sent title_bar alone.
     #[test]
-    fn switch_background_always_sends_all_four_body_writes() {
+    fn switch_background_omits_body_fields_a_variant_doesnt_define() {
         let title_bar = vec!["T1".to_string(), "T2".to_string(), "T3".to_string()];
 
+        // Mixer defines names+values only (no pad_state/page_labels) --
+        // title_bar + 2, not title_bar + all 4. Nullable per BodyFields'
+        // doc comment: omitting an unused field is safe because a genuine
+        // template switch auto-clears ctrl_element_name (protocol.json,
+        // confirmed) and the rest are assumed the same by analogy.
         let mixer = Background::Mixer {
             param_names: std::array::from_fn(|i| format!("N{i}")),
             param_values: std::array::from_fn(|i| format!("V{i}")),
         };
-        assert_eq!(switch_background_messages(&mixer, &title_bar).len(), 5, "title_bar + names + values + pad_state + page_labels");
+        assert_eq!(switch_background_messages(&mixer, &title_bar).len(), 3, "title_bar + names + values only");
 
-        // Menu has no Body schema of its own at all -- must still get all
-        // four Body writes (empty-content ones are fine; the point is the
-        // call always happens, not that every variant has data to fill it).
-        assert_eq!(switch_background_messages(&Background::Menu, &title_bar).len(), 5);
-        assert_eq!(switch_background_messages(&Background::Reset, &title_bar).len(), 5);
-        assert_eq!(switch_background_messages(&Background::Blank, &title_bar).len(), 5);
+        // Menu/Reset/Blank define NO Body fields at all -- title_bar alone.
+        assert_eq!(switch_background_messages(&Background::Menu, &title_bar).len(), 1);
+        assert_eq!(switch_background_messages(&Background::Reset, &title_bar).len(), 1);
+        assert_eq!(switch_background_messages(&Background::Blank, &title_bar).len(), 1);
+
+        // PadView defines names+pad_state (no values/page_labels) -- a
+        // different 2-of-4 subset, confirming this isn't hardcoded to
+        // Mixer's particular pair.
+        let pad_view = Background::PadView {
+            pad_names: std::array::from_fn(|i| format!("P{i}")),
+            pad_states: [PadState::Default; 16],
+        };
+        assert_eq!(switch_background_messages(&pad_view, &title_bar).len(), 3, "title_bar + names + pad_state only");
     }
 
     /// show_popup/show_message/hide_popup/hide_message must ALL resend the
@@ -1073,21 +1155,24 @@ mod tests {
         state.switch_background(bg, vec!["T1".into(), "T2".into(), "T3".into()]);
 
         // resend_body() bounces through a different template first (see its
-        // doc comment: resending the SAME template value never actually
-        // registered as a switch on real hardware) -- (5 Body + 1 tabs) for
-        // the bounce + (5 Body + 1 tabs) for the real restore = 12, plus the
-        // verb's own extra write for show_popup/show_message.
+        // doc comment) via full_redraw, which is: switch_background_messages
+        // (title_bar + only the Body fields this variant actually defines)
+        // + tabs + bigfont + current_value. Bounce target is Blank (no Body
+        // fields at all): 1 + 3 = 4. Real target is Mixer (names+values
+        // only, no pad_state/page_labels): 3 + 3 = 6. Total resend_body =
+        // 4 + 6 = 10, plus the verb's own extra write for show_popup/
+        // show_message.
         let show_popup_msgs = state.show_popup(&["A".to_string()]);
-        assert_eq!(show_popup_msgs.len(), 13, "12 bounce+restore Body+Footer messages + write_page_menu");
+        assert_eq!(show_popup_msgs.len(), 11, "10 bounce+restore messages + write_page_menu");
 
         let hide_popup_msgs = state.hide_popup();
-        assert_eq!(hide_popup_msgs.len(), 12, "just the bounce+restore Body+Footer resend");
+        assert_eq!(hide_popup_msgs.len(), 10, "just the bounce+restore resend");
 
         let show_message_msgs = state.show_message("hi");
-        assert_eq!(show_message_msgs.len(), 13, "12 bounce+restore Body+Footer messages + write_message");
+        assert_eq!(show_message_msgs.len(), 11, "10 bounce+restore messages + write_message");
 
         let hide_message_msgs = state.hide_message();
-        assert_eq!(hide_message_msgs.len(), 12, "just the bounce+restore Body+Footer resend");
+        assert_eq!(hide_message_msgs.len(), 10, "just the bounce+restore resend");
     }
 
     /// The bounce target itself must never equal the real target's own
@@ -1126,12 +1211,14 @@ mod tests {
             param_values: std::array::from_fn(|i| format!("V{i}")),
         };
         let switch_msgs = state.switch_background(bg, vec!["T1".into(), "T2".into(), "T3".into()]);
-        let last = switch_msgs.last().expect("switch_background must include a tabs write");
-        assert_eq!(last[8], DISPLAY_ID_MENU_BUTTON, "the appended message must target displayId 4 (menu_button/tabs)");
+        // full_redraw appends tabs/bigfont/current_value in that order after
+        // switch_background_messages' own writes -- tabs is no longer
+        // necessarily last (current_value is), so find it by displayId.
+        let tabs_msg = switch_msgs.iter().find(|m| m[8] == DISPLAY_ID_MENU_BUTTON).expect("switch_background must include a tabs write");
         // Default last_tabs is 5 non-empty " " placeholders -- confirm at
         // least one indexed entry actually made it into the message (i.e.
         // indexed_entries did NOT filter everything out as empty).
-        assert!(last.len() > 10, "a genuinely blank (filtered-out) tabs write would be much shorter than one with 5 real entries");
+        assert!(tabs_msg.len() > 10, "a genuinely blank (filtered-out) tabs write would be much shorter than one with 5 real entries");
 
         state.show_popup(&["A".to_string()]);
         let hide_msgs = state.hide_popup();

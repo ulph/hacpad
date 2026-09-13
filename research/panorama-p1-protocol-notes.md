@@ -1980,7 +1980,28 @@ clean** on the next photograph: the same previously-ghosted sequence now shows a
 knob labels correct AND a clean, evenly-blank 5-slot footer -- no residual button outlines at
 all.
 
-### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
+**Refined once more, same session**: the blast-everything Body fix above was itself too blunt
+-- pointed out directly ("you need to model, in the transmission code, what display ids each
+template uses... and use that, to build up the actual sysex"). protocol.json's own
+`display_ids` table already records this as `persists_across_template_switch`: `title_bar`/
+`big_font`/`current_value`/`menu_button` (1/2/3/4) are confirmed `true` (sticky chrome -- an
+overlay drawing over them leaves stale content until something explicitly rewrites them,
+exactly the Footer bug above), while `ctrl_element_name` (6) is confirmed `false` (a real
+template switch auto-clears it with NO write needed). So `Background::body_fields()` now
+returns each Body field as `Option` -- `None` when a variant doesn't define it, meaning the
+write is omitted entirely rather than forced blank, trusting the device's own confirmed
+auto-clear. The other three Body ids (`pad_state`/`page_labels`/`ctrl_element_value`) are
+`null`/unconfirmed in protocol.json -- assumed to behave the same by analogy, then actually
+tested rather than left as an assumption: switched to `TransportLauncher` (defines
+`page_labels` via `loop_left`/`loop_right`, confirmed showing "ZZLEFT"/"ZZRIGHT" on screen),
+then switched to `Mixer` (which does NOT define `page_labels` at all, so the write is now
+omitted) -- photographed clean, old text genuinely gone, confirming the auto-clear assumption
+holds for `page_labels` too, not just `ctrl_element_name`. Chrome (title_bar/big_font/
+current_value/tabs) remains unconditionally resent every time (all 4, confirmed sticky, no
+exceptions) via a shared `full_redraw` helper both `switch_background` and `resend_body` call,
+so the "always redraw everything visible without the overlay" rule still holds -- it's just
+that Body's OWN redraw is now driven by which fields a variant actually defines, not a blanket
+force-write of things the device already promises to clear itself.
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
 controls to CC numbers — raising the question of whether there's some bootstrap/handshake

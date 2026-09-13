@@ -182,6 +182,9 @@ enum SemanticCommand {
     ShowMessage { text: String },
     HideMessage,
     SetTabs { tabs: Vec<String> },
+    SetBigfont { text: String },
+    #[serde(rename_all = "camelCase")]
+    SetCurrentValue { text: String },
 }
 
 struct Device {
@@ -300,6 +303,12 @@ impl Device {
             }
             SemanticCommand::SetTabs { tabs } => {
                 self.default_conn.send(&self.device_state.set_tabs(tabs))?;
+            }
+            SemanticCommand::SetBigfont { text } => {
+                self.default_conn.send(&self.device_state.set_bigfont(text))?;
+            }
+            SemanticCommand::SetCurrentValue { text } => {
+                self.default_conn.send(&self.device_state.set_current_value(text))?;
             }
         }
         Ok(())

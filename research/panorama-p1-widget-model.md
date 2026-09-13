@@ -152,18 +152,28 @@ This is the payoff: instead of a pile of independently-diffed fields, the device
 exactly these operations. Everything above exists to justify why these are the right verbs
 and not others.
 
-1. **`switch_background(template, content)`** — sets the active Background AND resupplies its
-   Content in one call. This is the *only* verb that changes which Background is official, and
-   as a side effect it's also the *only* way to dismiss Message or an open popup (there is no
-   separate "dismiss" verb — dismissing **is** switching). `content` should always be resupplied
-   here since the switch clears whatever was there.
-2. **`set_chrome(title_bar?, big_font?, current_value?, tabs?)`** — safe to call anytime,
-   regardless of Background; never needs to be resent after a switch (it survives).
-3. **`show_message(text)`** — one-shot trigger. No corresponding `hide_message()`; call
-   `switch_background` to get back to compose content.
-4. **`show_popup(items, highlight)`** — one-shot trigger, independent of `switch_background`'s
-   `template` argument (always hardcoded to `page_template=0` internally). No
-   `hide_popup()` either, same reasoning.
+1. **`switch_background(bg, title_bar)`** — sets the active Background AND resupplies its own
+   Body content in one call (`Background::body_fields()`, nullable per field — a variant that
+   doesn't define a Body field omits that write, trusting the device's confirmed auto-clear
+   rather than forcing a blank one). Also always resends the four sticky Chrome fields
+   (title_bar/big_font/current_value/tabs, `full_redraw`) unconditionally, since those are
+   confirmed to survive a switch untouched -- meaning an overlay drawn over them leaves stale
+   content there until something explicitly rewrites them (Thirty-eighth finding: this is
+   exactly how a popup's own Esc/Enter buttons got permanently stuck).
+2. **`set_tabs(tabs)` / `set_bigfont(text)` / `set_current_value(text)`** — the three
+   independently-settable Chrome fields (title_bar is set via `switch_background` itself).
+   Safe to call anytime regardless of Background; remembered so every subsequent
+   `switch_background`/overlay show-or-hide keeps re-asserting them.
+3. **`show_message(text)` / `hide_message()`** — real show/hide pair now (not one-shot-only):
+   `hide_message()` bounces through a different `page_template` value first (same reasoning as
+   `hide_popup`) then fully redraws whatever Background was last active, including Chrome.
+   Resending the SAME template value was confirmed NOT to count as a real switch on this
+   device (Thirty-eighth finding) -- bouncing is required, not optional.
+4. **`show_popup(items)` / `set_popup_highlight(row)` / `hide_popup()`** — same real show/hide
+   pair, independent of `switch_background`'s own target (the popup is always hardcoded to
+   `page_template=0` internally). The highlight has no confirmed clear value of its own (any
+   value tried just moves it to another valid row or is ignored) -- only `hide_popup()` (a full
+   Background restore) removes it.
 5. **`set_led(cc, on)`** — Class 1, independent on/off LEDs.
 6. **`set_status_led(position: Option<1..=4>)`** — Class 2, already implemented as
    `status_led_messages` (clear-then-set as one unit).
@@ -239,8 +249,11 @@ code at all**. Partially closed this session:
 
 ## Open questions this model doesn't answer yet
 
-- Does `page_labels` actually behave as Content (cleared on Background switch), or is it
-  chrome-like? Never directly isolated, only assumed by analogy to `ctrl_element_name`.
+- ~~Does `page_labels` behave as Content or chrome?~~ — resolved: confirmed Content
+  (auto-cleared by a genuine Background switch with no explicit write needed), same as
+  `ctrl_element_name`. Directly tested (not just assumed by analogy this time): wrote
+  `page_labels` via `TransportLauncher`, switched to `Mixer` (which never defines
+  `page_labels` at all), photographed the old text genuinely gone.
 - Cosmetic overlap between the popup box and a Background's own content region, for
   Backgrounds other than `drum_pads` — low priority, not a correctness question.
 - Does the popup's own pagination (>8 items, `offset` stepping) interact with `switch_background`
