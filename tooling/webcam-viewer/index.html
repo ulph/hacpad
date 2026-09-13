@@ -100,6 +100,7 @@
   .led-item { display: flex; flex-direction: column; align-items: center; font-size: 9px; color: #aaa; width: 36px; }
   .led-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #555; background: #222; cursor: pointer; padding: 0; }
   .led-dot.on { background: #e0a030; border-color: #ffc060; box-shadow: 0 0 6px #e0a030; } /* color unconfirmed on hardware -- on/off only is confirmed, hue is a placeholder */
+  .led-dot.unknown { background: transparent; border: 1px dashed #555; cursor: default; } /* CC not yet found -- see checklist item 11 */
 </style>
 </head>
 <body>
@@ -203,6 +204,11 @@
       <div id="led-panel"></div>
     </fieldset>
 
+    <fieldset>
+      <label>CC 15+47 -- cursor-track volume (segmented, NOT on/off; 0-1023)</label>
+      <input type="text" id="in-cursorvolume" value="" placeholder="0-1023">
+    </fieldset>
+
     <div id="push-status" style="font-size:11px; color:#888; margin-bottom:2px;">not yet pushed</div>
     <div id="last-sent" style="font-size:10px; color:#666; margin-bottom:6px;">no sends yet</div>
     <button id="full-sync-btn" type="button" style="margin-bottom:10px;">Send full state (bypass diff)</button>
@@ -214,11 +220,16 @@ function el(id) { return document.getElementById(id); }
 function csv(s) { return s.split(',').map(x => x.trim()); }
 
 // See lib.rs's LED_CCS -- kept in sync by hand, same 18 CCs, same order.
+// `cc: null` entries are placeholders for LEDs we know exist (seen on real
+// hardware) but whose CC is still unfound -- rendered disabled/dashed rather
+// than silently omitted, so the gap stays visible instead of looking like an
+// oversight. See checklist item 11 / "Thirty-third finding".
 const LED_DEFS = [
   [16, 'Sel1'], [17, 'Sel2'], [18, 'Sel3'], [19, 'Sel4'], [20, 'Sel5'], [21, 'Sel6'], [22, 'Sel7'], [23, 'Sel8'],
   [106, 'Menu1'], [107, 'Menu2'], [108, 'Menu3'], [109, 'Menu4'], [110, 'Menu5'],
-  [80, 'Loop'], [84, 'Play'], [85, 'Record'], [29, 'AutoWr(?)'], [99, 'Status1'],
-  [30, 'Mute'], [31, 'Solo'],
+  [80, 'Loop'], [84, 'Play'], [85, 'Record'], [29, 'AutoWr(?)'],
+  [99, 'Status1'], [null, 'Status2'], [null, 'Status3'], [null, 'Status4'],
+  [30, 'Mute'], [31, 'Solo'], [25, 'CC25(?)'],
 ];
 
 function buildLedPanel() {
@@ -229,10 +240,16 @@ function buildLedPanel() {
     item.className = 'led-item';
     const dot = document.createElement('button');
     dot.type = 'button';
-    dot.className = 'led-dot';
-    dot.dataset.cc = cc;
-    dot.title = `CC ${cc}`;
-    dot.addEventListener('click', () => { dot.classList.toggle('on'); pushToDevice(); });
+    if (cc === null) {
+      dot.className = 'led-dot unknown';
+      dot.disabled = true;
+      dot.title = 'CC not yet found';
+    } else {
+      dot.className = 'led-dot';
+      dot.dataset.cc = cc;
+      dot.title = `CC ${cc}`;
+      dot.addEventListener('click', () => { dot.classList.toggle('on'); pushToDevice(); });
+    }
     const lbl = document.createElement('div');
     lbl.textContent = label;
     item.appendChild(dot);
@@ -498,7 +515,7 @@ connectService();
 let lastSent = {
   layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null,
   currentValue: null, pageLabels: null, padState: null, menuItems: null, menuHighlight: null,
-  message: null, ledsOn: null,
+  message: null, ledsOn: null, cursorVolume: null,
 };
 
 function arraysEqual(a, b) {
@@ -524,6 +541,7 @@ function currentState() {
     menuHighlight: parseInt(el('in-menuhighlight').value, 10) || 0,
     message: el('in-message-overlay').value,
     ledsOn: ledsOnList(),
+    cursorVolume: parseInt(el('in-cursorvolume').value, 10) || 0,
   };
 }
 
@@ -565,7 +583,7 @@ function pushToDevice() {
         bigfont: lastSent.bigfont, currentValue: lastSent.currentValue, tabs: lastSent.tabs,
         names: cur.names, values: cur.values, padState: cur.padState, pageLabels: cur.pageLabels,
         menuItems: lastSent.menuItems, menuHighlight: lastSent.menuHighlight,
-        message: lastSent.message, ledsOn: lastSent.ledsOn,
+        message: lastSent.message, ledsOn: lastSent.ledsOn, cursorVolume: lastSent.cursorVolume,
       };
       return;
     }
@@ -627,6 +645,11 @@ function pushToDevice() {
       sendField(cur.layout, { ledsOn: cur.ledsOn });
       lastSent.ledsOn = cur.ledsOn;
     }
+    // CC 15+47 -- also plain CC feedback, unrelated to page_template.
+    if (cur.cursorVolume !== lastSent.cursorVolume) {
+      sendField(cur.layout, { cursorVolume: cur.cursorVolume });
+      lastSent.cursorVolume = cur.cursorVolume;
+    }
   }, 350);
 }
 
@@ -687,6 +710,7 @@ function applyScreenPush(push, force) {
       d.classList.toggle('on', push.ledsOn.includes(parseInt(d.dataset.cc, 10)));
     });
   }
+  if (push.cursorVolume !== undefined) el('in-cursorvolume').value = push.cursorVolume;
   renderSimulator();
 
   // This push is itself a record of what's actually on the device (from this
@@ -706,6 +730,7 @@ function applyScreenPush(push, force) {
   if (push.menuHighlight !== undefined) lastSent.menuHighlight = push.menuHighlight;
   if (push.message !== undefined) lastSent.message = push.message;
   if (push.ledsOn) lastSent.ledsOn = push.ledsOn;
+  if (push.cursorVolume !== undefined) lastSent.cursorVolume = push.cursorVolume;
 }
 
 // Purely hot-reload now (mtime check) -- state sync is the WebSocket's job

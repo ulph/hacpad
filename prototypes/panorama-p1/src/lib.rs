@@ -289,6 +289,8 @@ pub const LED_CCS: &[u8] = &[
         // (`case CC.30: cursorTrack.getMute().toggle()`) and this LED feedback -- standard pattern,
         // found via a fuller re-grep of every literal sendChannelController call site.
     31, // Solo -- cursorTrack.getSolo(), same pattern as Mute (CC 30) above.
+    25, // a genuine sendChannelController call site (tied to menuButtonLabel text), but NOT yet
+        // characterized -- included here as a live-testable candidate, not a confirmed LED.
 ];
 
 /// One CC message per entry in `LED_CCS`, each set to on (127) if that CC
@@ -297,6 +299,27 @@ pub const LED_CCS: &[u8] = &[
 /// there's no separate "which LEDs are currently lit" bookkeeping to drift.
 pub fn led_cc_messages(on: &[u8]) -> Vec<[u8; 3]> {
     LED_CCS.iter().map(|&cc| cc_message(cc, if on.contains(&cc) { 127 } else { 0 })).collect()
+}
+
+// cursorTrack.getVolume() feedback -- NOT a simple on/off LED, unlike every
+// entry in LED_CCS above. Confirmed from source (Thirty-third finding):
+// `cursorTrack.getVolume().addValueObserver(1024, function(a){var b=a&7;
+// a>>=3; sendChannelController(0,CC.15,b); sendChannelController(0,CC.47,a)})`
+// -- a 0-1023 value split across two CCs (low 3 bits on CC 15, remaining 7
+// bits on CC 47), almost certainly driving a segmented level-meter bargraph
+// for the currently-focused track. Kept separate from LED_CCS/led_cc_messages
+// since it isn't a plain on/off set.
+pub const CC_CURSOR_VOLUME_LOW: u8 = 15;
+pub const CC_CURSOR_VOLUME_HIGH: u8 = 47;
+
+/// `value` is clamped to 0-1023 (the real observer's own scale, per
+/// `addValueObserver(1024, ...)`) before being split the same way the driver
+/// does: low 3 bits to CC 15, the rest to CC 47.
+pub fn cursor_volume_messages(value: u16) -> [[u8; 3]; 2] {
+    let v = value.min(1023);
+    let low = (v & 7) as u8;
+    let high = (v >> 3) as u8;
+    [cc_message(CC_CURSOR_VOLUME_LOW, low), cc_message(CC_CURSOR_VOLUME_HIGH, high)]
 }
 
 pub fn find_out_port(out: &MidiOutput, needle: &str) -> Result<MidiOutputPort, Box<dyn Error>> {

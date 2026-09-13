@@ -99,6 +99,11 @@ struct ScreenUpdate {
     // explicit "turn everything off" is distinguishable from "not mentioned".
     #[serde(default, rename = "ledsOn")]
     leds_on: Option<Vec<u8>>,
+    // cursorTrack.getVolume() feedback, split across CC 15/47 -- NOT a simple
+    // on/off LED (see lib.rs's cursor_volume_messages doc comment,
+    // "Thirty-third finding"). 0-1023, matching the real observer's own scale.
+    #[serde(default, rename = "cursorVolume")]
+    cursor_volume: Option<u16>,
 }
 
 /// The state a freshly-started service applies to the real device and hands
@@ -123,6 +128,7 @@ fn default_state() -> ScreenUpdate {
         menu_highlight: Some(3),
         message: "hacpad".to_string(), // the established resting-baseline text (see the "hacpad" note in the protocol notes)
         leds_on: Some(vec![16, 18, 20, 22, 106, 108, 110, 80, 85]), // arbitrary mix so both on/off states show
+        cursor_volume: Some(768), // arbitrary non-zero demo value (0-1023 scale)
     }
 }
 
@@ -191,6 +197,11 @@ impl Device {
             for msg in led_cc_messages(on) {
                 self.default_conn.send(&msg)?;
                 thread::sleep(Duration::from_millis(2));
+            }
+        }
+        if let Some(v) = update.cursor_volume {
+            for msg in cursor_volume_messages(v) {
+                self.default_conn.send(&msg)?;
             }
         }
         Ok(())
