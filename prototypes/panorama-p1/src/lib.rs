@@ -129,6 +129,35 @@ pub fn layout_template(layout: &str) -> u8 {
         .unwrap_or(16)
 }
 
+/// The ONLY read-back this protocol offers at all (confirmed repeatedly: no
+/// query/state-read capability exists otherwise). The device replies to
+/// `0x09`-family lifecycle SysEx specifically -- confirmed directly that
+/// `0x08`-family lifecycle commands and ordinary `0x06` compose writes get
+/// NO reply whatsoever, so this cannot verify an arbitrary write, only a
+/// lifecycle (init/exit) one. The reply mirrors the sent bytes exactly
+/// except the manufacturer sub-id (byte 5: `0x01` host-to-device becomes
+/// `0x02` device-to-host) and the final content byte (the one right before
+/// the trailing `0xF7`), which is decremented by 1 -- e.g. sending INIT_2
+/// (`...09 03 00 00 01 3E 34`) gets back `...09 03 00 00 01 3E 33`.
+/// Returns `None` if `sent` isn't a `0x09`-family message (nothing to
+/// expect an ack for).
+pub fn expected_ack(sent: &[u8]) -> Option<Vec<u8>> {
+    if sent.len() < 9 || sent[0] != 0xF0 || sent[5] != 0x01 || sent[6] != 0x09 {
+        return None;
+    }
+    let mut ack = sent.to_vec();
+    ack[5] = 0x02;
+    let last = ack.len() - 2; // the byte immediately before the trailing F7
+    ack[last] = ack[last].wrapping_sub(1);
+    Some(ack)
+}
+
+/// Convenience wrapper around `expected_ack` for checking an actually-
+/// received message against what was sent.
+pub fn is_expected_ack(sent: &[u8], received: &[u8]) -> bool {
+    expected_ack(sent).as_deref() == Some(received)
+}
+
 pub fn sysex(body: &[u8]) -> Vec<u8> {
     let mut msg = SYSEX_PREFIX.to_vec();
     msg.extend_from_slice(body);
@@ -606,4 +635,170 @@ pub fn find_in_port(inp: &MidiInput, needle: &str) -> Result<MidiInputPort, Box<
         .into_iter()
         .find(|p| inp.port_name(p).map(|n| n.contains(needle)).unwrap_or(false))
         .ok_or_else(|| format!("no MIDI input port matching {needle:?}").into())
+}
+
+// --- Device -> host: control input -----------------------------------------
+// Moved here from src/main.rs (the original, confirmed-on-hardware home of
+// this decoding) so it's shared library code, not a one-off demo-binary copy
+// -- service.rs (the actual persistent bridge) had none of this until now,
+// which was exactly the "we have NOT worked on the semantics for values
+// flowing FROM the device" gap. See the "Device -> host: input semantics"
+// section in research/panorama-p1-widget-model.md for what's confirmed vs.
+// still tentative here (transport/nav CC-to-button assignments in
+// particular are sourced from the Bitwig driver's JS, not all individually
+// pressed-and-observed on this hardware).
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CcKind {
+    Fader,
+    Encoder,
+    Button,
+    Unknown,
+}
+
+/// Confirmed against real hardware this session (fader/encoder/button CCs
+/// verified live); transport/nav ordering within their ranges is still an
+/// unverified guess in places (the reference only gave the range and named
+/// functions, not the exact per-CC assignment) -- see the inline citations.
+pub fn cc_name(cc: u8) -> String {
+    match cc {
+        0..=7 => format!("fader_{}", cc + 1),
+        14 => "fader_master".to_string(),
+        16..=23 => format!("select_{}", cc - 16 + 1),
+        48..=55 => format!("pan_encoder_{}", cc - 48 + 1),
+        64..=71 => format!("param_encoder_{}", cc - 64 + 1),
+        // Transport row and friends -- CORRECTED AGAIN (Twenty-ninth finding): the first pass at
+        // this (photo-of-finger-position based) turned out to have a one-step lag between the
+        // physical press and the log line/photo landing during rapid sequential presses -- the
+        // webcam attribution below was consistently off by one position. Re-derived from the
+        // actual PANORAMA_P1.control.js CC enum + each case body's real Bitwig API call
+        // (transport.play(), .stop(), .record(), .rewind(), .fastForward(), .toggleLoop()), which
+        // is authoritative and not subject to that lag at all. Trust this over any earlier photo-
+        // based guess for these six.
+        80 => "loop".to_string(),    // transport.toggleLoop()
+        81 => "rewind".to_string(),  // transport.rewind()
+        82 => "forward".to_string(), // transport.fastForward()
+        83 => "stop".to_string(),    // transport.stop() / transport.setPosition(0)
+        84 => "play".to_string(),    // transport.play()
+        85 => "record".to_string(),  // transport.record()
+        86 => "loop_in".to_string(), // transport.getInPosition().set(...)
+        87 => "loop_out".to_string(), // transport.getOutPosition().set(...)
+        89 => "click".to_string(), // transport.toggleClick()/toggleMetronomeTicks()
+        // 88, 90, 93-95, 97-98, 100-102, 104-105: resolved from a fuller re-grep of PANORAMA_P1.control.js
+        // ("Thirty-third finding" in the protocol notes) -- the earlier pass's case-body grep missed these
+        // because they span more of the minified line than that grep searched.
+        88 => "undo_redo".to_string(), // Shift-gated: shift=application.redo(), plain=application.undo()
+        90 => "overdub".to_string(), // Shift-gated: shift=transport.toggleWriteArrangerAutomation() ("Automation:"), plain=transport.toggleOverdub() ("Overdub:")
+        // 93/94: both literally share ONE case body (`case CC.93: case CC.94: PATCH_PRESSED=0<e`) --
+        // a fallthrough that just sets a shared "patch browsing" gate flag, not two separately-handled
+        // buttons at this switch. Labeled patch_minus/patch_plus from the physical button row
+        // (Shift/Track-/Track+/Patch-/Patch+/View, confirmed live via a webcam photo showing the
+        // printed labels) -- matches an EARLIER, separate finding that attributed CC 94 to
+        // application.zoomIn()/arrowKeyDown()/preset-scroll depending on Shift/browser state (that
+        // logic lives elsewhere, likely reading PATCH_PRESSED alongside encoder direction, not at this
+        // exact dispatch site) -- the two findings aren't fully reconciled yet, treat the exact
+        // patch_minus-vs-patch_plus split as tentative.
+        93 => "patch_minus".to_string(),
+        94 => "patch_plus".to_string(),
+        95 => "view".to_string(), // onView(), or (unshifted, some states) sends the 0x0B "Launcher" SysEx family documented elsewhere
+        91 | 92 => format!("nav_{}", cc - 91 + 1), // still not individually resolved from source
+        99 => "f_keys".to_string(), // confirmed live: opens a distinct, DEVICE-NATIVE "F-KEYS" page (F1-F11/P5/P11 grid) -- rendered by the P1 itself, not by anything we (or a DAW driver) send over SysEx; source's handler just does setActiveDisplayPage/gBrowserOpen bookkeeping on the Bitwig-driver side, which isn't even running in our setup. Confirmed momentary (releases when the button is released). The P1 also exposes a genuine USB HID keyboard interface (class 3, standard boot-keyboard report descriptor, separate from MIDI) -- plausibly what "F-Keys" actually drives, but no HID report was captured yet to confirm the link empirically.
+        // 100-102, 104: all resolved as browser/patch-menu "cancel"-shaped handlers (gBrowserOpen=false,
+        // setActiveDisplayPage/SurfaceStatus changes) but not individually distinguished as specific
+        // physical buttons yet -- kept generic and source-quoted rather than over-claiming a name.
+        100 => "browser_cancel_1".to_string(), // gBrowserOpen=false; shift: application.createInstrumentTrack(-1)
+        101 => "browser_cancel_2".to_string(), // gBrowserOpen=false; setActiveDisplayPage + nek_set_nektarine_instance_active(0)
+        102 => "browser_cancel_3".to_string(), // gBrowserOpen=false; softTakeoverReset(); setActiveDisplayPage(internalPage)
+        104 => "surface_status".to_string(), // SurfaceStatus/SURFACE.connected-state related -- plausibly not a normal user button, not yet confirmed live
+        105 => "automation_write".to_string(), // transport.toggleWriteArrangerAutomation(), unconditional (unlike CC 90's Shift-gated version) -- likely the button whose LED is CC 29
+        // Confirmed from PANORAMA_P1.control.js's onMidi CC dispatch (Z811481AF53E7994F1),
+        // then verified live via the physical device (Twenty-eighth finding):
+        96 => "shift".to_string(), // momentary; source sets a boolean gate flag on value>0/0
+        // 97: CORRECTED -- source is `case CC.97: TOGGLE_MUTE_PRESSED=0<e` (a mode-gate flag), NOT the
+        // jog wheel's push/click as previously guessed. Distinct from CC 30, which directly toggles
+        // cursorTrack's mute AND drives its own LED -- CC 97 is plausibly a pad/drum-mode mute-select
+        // button instead, not yet confirmed live which physical control this is.
+        97 => "toggle_mute_pressed".to_string(),
+        98 => "toggle_view_pressed".to_string(), // source: TOGGLE_VIEW_PRESSED=0<e; onToggleView() on press
+        103 => "mode".to_string(), // source: setActiveDisplayPage(internalPage) on press
+        106 => "menu_button_0".to_string(), // 5th of the "menu buttons" LED range (106-110); not otherwise distinguished from 107-110
+        107 => "screen_button_1".to_string(),
+        108 => "screen_button_2".to_string(),
+        109 => "screen_button_3_exit".to_string(), // confirmed live: closes the popup menu (onMenuCancel) when one is open
+        110 => "menu_enter".to_string(), // confirmed live: onMenuEnter when a popup menu is open
+        111 => "jog_wheel".to_string(), // confirmed live: relative encoder ticks; also reused as the popup-menu highlight-index CC in the output direction (Twenty-seventh finding)
+        _ => format!("cc_{cc}"),
+    }
+}
+
+pub fn cc_kind(cc: u8) -> CcKind {
+    match cc {
+        0..=7 | 14 => CcKind::Fader,
+        48..=55 | 64..=71 | 111 => CcKind::Encoder,
+        16..=23 | 80..=90 | 91..=103 | 106..=110 => CcKind::Button,
+        _ => CcKind::Unknown,
+    }
+}
+
+/// A decoded device-originated control input. Confirmed shape for Fader/
+/// Encoder/Button live on hardware; `Unknown` is deliberately a catch-all
+/// rather than a guess. Nothing downstream of this (a "which DAW parameter
+/// does fader_3 mean" mapping layer, or feeding a value back into
+/// `DeviceState`) exists yet -- this is only the byte-level decode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputEvent {
+    Fader { cc: u8, name: String, value: u8, normalized: f32 },
+    Encoder { cc: u8, name: String, delta: i8 },
+    Button { cc: u8, name: String, pressed: bool },
+    Unknown { cc: u8, name: String, value: u8 },
+}
+
+pub fn decode_cc(cc: u8, value: u8) -> InputEvent {
+    let name = cc_name(cc);
+    match cc_kind(cc) {
+        CcKind::Fader => InputEvent::Fader {
+            cc,
+            name,
+            value,
+            normalized: value as f32 / 127.0,
+        },
+        CcKind::Encoder => {
+            // relative 2's-complement: 1..=63 = +delta, 65..=127 = -delta
+            let delta: i8 = if value < 64 {
+                value as i8
+            } else {
+                -(128 - value as i16) as i8
+            };
+            InputEvent::Encoder { cc, name, delta }
+        }
+        CcKind::Button => InputEvent::Button {
+            cc,
+            name,
+            pressed: value == 127,
+        },
+        CcKind::Unknown => InputEvent::Unknown { cc, name, value },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ack_matches_captured_hardware_reply() {
+        let sent = sysex(&INIT_2);
+        let ack = expected_ack(&sent).expect("INIT_2 is a 0x09-family message");
+        // The literal bytes captured live from the device (see the ACK test
+        // in the protocol notes) -- built by hand, NOT via sysex(), since
+        // that helper always emits the host-to-device prefix (sub-id 0x01)
+        // and this is a device-to-host reply (sub-id 0x02).
+        let captured: Vec<u8> = vec![0xF0, 0x00, 0x01, 0x77, 0x7F, 0x02, 0x09, 0x03, 0x00, 0x00, 0x01, 0x3E, 0x33, 0xF7];
+        assert_eq!(ack, captured, "expected_ack(INIT_2) must match the live-captured device reply");
+    }
+
+    #[test]
+    fn no_ack_expected_for_0x08_or_0x06() {
+        assert!(expected_ack(&sysex(&INIT_1)).is_none());
+        assert!(expected_ack(&write_bigfont(16, "X")).is_none());
+    }
 }

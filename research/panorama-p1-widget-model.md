@@ -153,6 +153,74 @@ and not others.
    `status_led_messages` (clear-then-set as one unit).
 7. **`set_cursor_volume(0..=1023)`** — the segmented CC 15/47 pair.
 
+## Session verification — real read-back, not just documentation
+
+Direct answer to "the schema has no error/rejection modeling at all": partially closed.
+Found (and unit-tested against the exact live-captured bytes) that the device replies to
+`0x09`-family lifecycle SysEx specifically with an ACK -- identical bytes except the
+manufacturer sub-id (`0x01`→`0x02`, host-to-device→device-to-host) and the final content
+byte decremented by 1. Confirmed directly (separate live test) that `0x08`-family lifecycle
+commands and ordinary `0x06` compose writes get **no** reply at all -- so this cannot verify
+an arbitrary content write, only whether a session got established.
+
+`expected_ack`/`is_expected_ack` (lib.rs) implement this; `service.rs`'s `Device::connect()`
+now opens a brief input connection, sends INIT_2, and waits up to 400ms for the matching ACK
+before proceeding -- `session_verified: bool` on `Device`, logged either way ("Session
+verified: device ACKed INIT_2." or a warning explaining the write-may-be-silently-ignored
+risk). This is the first piece of the "session invalidation is completely unmodeled" gap
+that's actually closed: we can now know, at startup, whether the device is really listening,
+rather than assuming every write works. **Still open**: nothing currently re-verifies
+mid-session (a session could still go bad after startup and nothing would notice until a
+write visibly fails to render), and there's still no way to verify an ordinary content write
+landed -- only the lifecycle handshake itself.
+
+## Device → host: input semantics (the other half of the bridge)
+
+Everything above this line is one direction only: host writes, device renders. Flagged as a
+real gap ("we have NOT worked on the semantics for values flowing FROM the device") because it
+was true — physical fader/encoder/button input had a confirmed byte-level decode (`main.rs`,
+`decode_cc`/`cc_name`/`cc_kind`), but it lived only in a demo binary that printed to stdout; the
+actual persistent bridge (`service.rs`, the one thing anything else talks to) had **no input
+code at all**. Partially closed this session:
+
+- `CcKind`/`cc_name`/`cc_kind`/`InputEvent`/`decode_cc` moved into `lib.rs` — shared, not a
+  binary-local copy — so `service.rs` (or anything else) can use the same confirmed decode
+  `main.rs` already had, without re-deriving or drifting from it.
+- `service.rs` now opens a **permanent** MIDI input connection (`start_input_listener`,
+  distinct from `Device::connect()`'s temporary ACK-verification one, which sends INIT_2 and
+  drops itself before this starts), decodes every incoming Control Change, and keeps the latest
+  decoded value per control name (`LastInput`, keyed by `cc_name()` — `"fader_3"`,
+  `"jog_wheel"`, etc.) in shared memory for as long as the process runs.
+- A newly-connecting WebSocket client is now handed that snapshot as
+  `{"inputSnapshot": {...}}`, a separate message from the existing screen-state sync, so an
+  existing client that doesn't know the key (index.html doesn't yet) just ignores it.
+
+**Still open / NOT done, to avoid overclaiming**:
+
+- **No live push to already-connected clients.** `handle_client`'s per-client loop only reads
+  (`socket.read()`, blocking) — there's no writer channel per client yet, for input OR for
+  screen-state edits from another tab. A fresh-connecting client sees the latest known input;
+  an already-open one does not get updated in real time. Same pre-existing limitation noted in
+  `handle_client`'s own doc comment, now also true for input.
+- **No semantic/business-logic layer above the raw decode.** `InputEvent` says "fader_3 moved
+  to 96/127" — nothing maps that to a DAW parameter, a `Background` field, or a `DeviceState`
+  action (e.g. jog-wheel deltas driving `set_popup_highlight`, or a fader move updating
+  `ctrl_element_value` in the currently-displayed `Background`). That coupling is unbuilt.
+  `InputEvent` and `Background`/`DeviceState` are two disconnected models right now.
+- **The F-Keys button (CC 99) drives a device-native page, not our SysEx display at all** (see
+  `f_keys`'s doc comment in lib.rs) — a reminder that not every physical control's effect is
+  reachable or overridable through this MIDI-CC decode path.
+- **Most of the CC map is reference-sourced, not individually pressed-and-confirmed on this
+  hardware.** Faders (0–7/14), pan encoders (48–55), and a handful of buttons (shift 96,
+  menu/jog 106–111) are directly confirmed live; the transport row, nav row, and most of the
+  88–105 range are sourced from re-grepping the Bitwig driver's JS (see the inline citations in
+  `cc_name` — "Thirty-third finding" etc.) and some are explicitly marked tentative or
+  unreconciled in the code comments themselves (patch_minus/patch_plus, CC 97). Treat `cc_name`
+  as "our best current attribution," not "hardware-verified for every branch."
+- **Buttons are decoded as bare press/release (127/0), not debounced or edge-detected** — a
+  held button re-sends 127 repeatedly on some controls (not characterized here); nothing
+  distinguishes "pressed" from "still pressed."
+
 ## Open questions this model doesn't answer yet
 
 - Does `page_labels` actually behave as Content (cleared on Background switch), or is it
@@ -161,3 +229,6 @@ and not others.
   Backgrounds other than `drum_pads` — low priority, not a correctness question.
 - Does the popup's own pagination (>8 items, `offset` stepping) interact with `switch_background`
   at all, or is it purely an Overlay-layer concern reachable only via `show_popup`?
+- Message-vs-popup z-order is still contradictory (see the layer table) — not re-isolated yet.
+- 10 of 13 `Background` variants remain schema-only, never exercised through the verb layer.
+- No mid-session re-verification exists yet — only a one-shot check at `Device::connect()`.

@@ -36,20 +36,28 @@
 //! protocol notes: the device itself has no read-back, so there's nothing
 //! more authoritative to report.
 //!
-//! Only handles output (screen writes) for now; relaying the device's own
-//! CC input back over the same WebSocket is a natural next step, not yet
-//! implemented -- main.rs already does CC decoding, this binary doesn't
-//! duplicate that yet.
+//! Also decodes the device's own CC input (via lib.rs's shared decode_cc,
+//! moved here from what used to be main.rs's own private copy) through a
+//! permanent input connection, and hands each newly-connecting client a
+//! snapshot of the latest known value per control as
+//! `{"inputSnapshot": {"fader_1": {...}, ...}}`, right after the normal
+//! screen-state sync. **Still not done**: pushing an input change LIVE to
+//! already-connected clients -- handle_client's per-client loop only reads
+//! (see its own doc comment); a real broadcast needs a writer channel per
+//! client, which doesn't exist yet for screen-state pushes either. So this
+//! closes "the service now knows about input at all", not "input is
+//! real-time over the wire yet".
 //!
 //! Usage:
 //!     cargo run --bin service            # listens on ws://0.0.0.0:8091
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
-use midir::{MidiOutput, MidiOutputConnection};
+use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use serde::{Deserialize, Serialize};
 use tungstenite::Message;
 
@@ -144,6 +152,13 @@ struct Device {
     default_conn: MidiOutputConnection,
     #[allow(dead_code)] // kept open for the session; init already sent through it
     port1_conn: MidiOutputConnection,
+    /// Whether the device actually ACKed INIT_2 -- the only read-back this
+    /// protocol offers at all (`expected_ack` in lib.rs). Ordinary compose
+    /// writes get no reply, so this can only confirm the session got
+    /// established at startup, not that every later write landed -- but
+    /// that's still a real improvement over assuming it silently worked
+    /// (see the widget-model doc's "no error/rejection modeling" gap).
+    session_verified: bool,
 }
 
 impl Device {
@@ -156,14 +171,54 @@ impl Device {
         let port1_port = find_out_port(&port1_out, PORT_ONE)?;
         let mut port1_conn = port1_out.connect(&port1_port, "hacpad-service-port1-conn")?;
 
+        // Temporary input connection, just long enough to check for INIT_2's
+        // ACK -- dropped right after, since this is a one-shot verification,
+        // not ongoing input handling (that's main.rs's job).
+        let default_in = MidiInput::new("hacpad-service-verify")?;
+        let default_in_port = find_in_port(&default_in, PORT_DEFAULT)?;
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let _verify_conn = default_in.connect(
+            &default_in_port,
+            "hacpad-service-verify-conn",
+            move |_stamp, msg, _| {
+                let _ = tx.send(msg.to_vec());
+            },
+            (),
+        )?;
+
         port1_conn.send(&sysex(&INIT_LINUX_ONLY))?;
         thread::sleep(Duration::from_millis(50));
         default_conn.send(&sysex(&INIT_1))?;
         thread::sleep(Duration::from_millis(50));
-        default_conn.send(&sysex(&INIT_2))?;
+        let init2 = sysex(&INIT_2);
+        default_conn.send(&init2)?;
+
+        let deadline = std::time::Instant::now() + Duration::from_millis(400);
+        let mut session_verified = false;
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(msg) if is_expected_ack(&init2, &msg) => {
+                    session_verified = true;
+                    break;
+                }
+                Ok(_) => continue, // some other unsolicited message, keep waiting for the ack
+                Err(_) => break,   // timed out
+            }
+        }
+        if session_verified {
+            println!("Session verified: device ACKed INIT_2.");
+        } else {
+            eprintln!(
+                "warning: no ACK received for INIT_2 within 400ms -- session may not be \
+                 established (device disconnected, or in a bad state from an earlier \
+                 EXIT-shaped write elsewhere -- see \"session-invalidation\" in the widget-model doc)"
+            );
+        }
+        // _verify_conn drops here, releasing the temporary input connection.
+
         thread::sleep(Duration::from_millis(200));
 
-        Ok(Self { default_conn, port1_conn })
+        Ok(Self { default_conn, port1_conn, session_verified })
     }
 
     fn apply(&mut self, update: &ScreenUpdate) -> Result<(), Box<dyn Error>> {
@@ -236,7 +291,58 @@ impl Device {
 /// with every other field silently missing. Merging keeps all of them.
 type LastState = std::sync::Mutex<serde_json::Map<String, serde_json::Value>>;
 
-fn handle_client(stream: std::net::TcpStream, device: &std::sync::Mutex<Device>, last_state: &LastState) {
+/// Latest decoded value per named control (`InputEvent`, see lib.rs), keyed
+/// by `cc_name()` -- e.g. `"fader_3"`, `"jog_wheel"`. Device -> host, the
+/// mirror image of `LastState` (host -> device). Updated only by the
+/// permanent input listener started in `main()`; read by `handle_client` to
+/// hand a fresh-connecting client a snapshot of "what does the hardware say
+/// right now", same spirit as `LastState`'s screen-state snapshot.
+type LastInput = std::sync::Mutex<HashMap<String, serde_json::Value>>;
+
+/// Opens a permanent MIDI input connection and decodes every Control Change
+/// via lib.rs's `decode_cc`, storing the latest event per control name into
+/// `last_input`. Distinct from `Device::connect()`'s temporary ACK-
+/// verification input connection, which sends INIT_2 and drops itself
+/// before this runs -- ALSA/midir is fine with the two being sequential,
+/// not concurrent, since the temporary one is gone by the time this opens.
+fn start_input_listener(
+    last_input: std::sync::Arc<LastInput>,
+) -> Result<MidiInputConnection<()>, Box<dyn Error>> {
+    let input = MidiInput::new("hacpad-service-input")?;
+    let input_port = find_in_port(&input, PORT_DEFAULT)?;
+    let conn = input.connect(
+        &input_port,
+        "hacpad-service-input-conn",
+        move |_stamp, msg, _| {
+            if msg.len() >= 3 && (0xB0..=0xBF).contains(&msg[0]) {
+                let event = decode_cc(msg[1], msg[2]);
+                println!("input: {event:?}");
+                if let Ok(value) = serde_json::to_value(&format!("{event:?}")) {
+                    // InputEvent doesn't derive Serialize (it's a debug-only
+                    // decode result so far, see lib.rs) -- store its Debug
+                    // text rather than adding derive(Serialize) purely for
+                    // this, since no consumer needs structured fields yet.
+                    let name = match &event {
+                        InputEvent::Fader { name, .. }
+                        | InputEvent::Encoder { name, .. }
+                        | InputEvent::Button { name, .. }
+                        | InputEvent::Unknown { name, .. } => name.clone(),
+                    };
+                    last_input.lock().unwrap().insert(name, value);
+                }
+            }
+        },
+        (),
+    )?;
+    Ok(conn)
+}
+
+fn handle_client(
+    stream: std::net::TcpStream,
+    device: &std::sync::Mutex<Device>,
+    last_state: &LastState,
+    last_input: &LastInput,
+) {
     let mut socket = match tungstenite::accept(stream) {
         Ok(s) => s,
         Err(e) => {
@@ -255,6 +361,15 @@ fn handle_client(stream: std::net::TcpStream, device: &std::sync::Mutex<Device>,
     {
         let snapshot = serde_json::Value::Object(last_state.lock().unwrap().clone());
         if let Ok(text) = serde_json::to_string(&snapshot) {
+            let _ = socket.send(Message::Text(text.into()));
+        }
+    }
+    // Device -> host: hand over whatever the physical controls last reported,
+    // as its own message so existing clients that don't know this key
+    // (index.html doesn't yet) can just ignore it.
+    {
+        let input_snapshot = serde_json::json!({ "inputSnapshot": *last_input.lock().unwrap() });
+        if let Ok(text) = serde_json::to_string(&input_snapshot) {
             let _ = socket.send(Message::Text(text.into()));
         }
     }
@@ -296,6 +411,13 @@ fn handle_client(stream: std::net::TcpStream, device: &std::sync::Mutex<Device>,
 fn main() -> Result<(), Box<dyn Error>> {
     println!("Connecting to Panorama P1...");
     let mut device = Device::connect()?;
+    if !device.session_verified {
+        eprintln!(
+            "Continuing anyway -- writes will be sent, but they may be silently ignored by \
+             the device until it's power-cycled or otherwise recovers. Restarting this \
+             process (which re-sends INIT) is the current recovery mechanism."
+        );
+    }
 
     // Apply the exhaustive default state to the real device up front, and
     // seed `last_state` with it -- so the very first client to connect (no
@@ -331,6 +453,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let device = std::sync::Arc::new(std::sync::Mutex::new(device));
     let last_state: std::sync::Arc<LastState> = std::sync::Arc::new(std::sync::Mutex::new(initial_map));
+    let last_input: std::sync::Arc<LastInput> = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+    // Kept alive for the rest of main()'s life (never read again after this
+    // point) -- dropping it would silently stop delivering input.
+    let _input_conn = match start_input_listener(std::sync::Arc::clone(&last_input)) {
+        Ok(conn) => Some(conn),
+        Err(e) => {
+            eprintln!("warning: could not start input listener ({e}); device -> host values won't be tracked");
+            None
+        }
+    };
+
     println!("Connected. Listening on ws://0.0.0.0:{WS_PORT}");
 
     let listener = TcpListener::bind(("0.0.0.0", WS_PORT))?;
@@ -344,7 +478,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         let device = std::sync::Arc::clone(&device);
         let last_state = std::sync::Arc::clone(&last_state);
-        thread::spawn(move || handle_client(stream, &device, &last_state));
+        let last_input = std::sync::Arc::clone(&last_input);
+        thread::spawn(move || handle_client(stream, &device, &last_state, &last_input));
     }
     Ok(())
 }
