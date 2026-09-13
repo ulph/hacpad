@@ -1931,6 +1931,55 @@ Root-caused and confirmed on real hardware, not assumed:
    stale "Item5" mid-investigation was the same lag artifact, re-confirmed by waiting and
    re-capturing rather than assumed away.
 
+### Thirty-eighth finding: resending the SAME page_template never registers as a real switch -- only bouncing through a different one clears an overlay
+
+Direct follow-up after the Thirty-seventh finding's fix (all four Body fields on every
+switch) still didn't fix "hiding popup from the browser" -- reported directly, tested
+immediately rather than assumed fixed. Photographed the exact failure: `switchBackground
+(Mixer)` → `showPopup` → `hidePopup` (which restores `last_background`, i.e. Mixer again,
+unchanged) produced a garbled hybrid frame -- the new Body content (fresh param names/values)
+was correct, but the popup's own overlay graphic (box border, item list, `Esc`/`Enter`
+buttons) stayed ghosted on top of it, half-overlapping the new content.
+
+**Root cause, isolated by direct A/B test**: restoring to the exact same `Background` that
+was already active means `page_template` never actually changes VALUE between the two writes
+-- and this device apparently requires the template value to genuinely change to run its own
+overlay-clearing logic, not merely receive a fresh content write under the same template
+number. Confirmed by forcing a real value change: `switchBackground(Mixer)` → `showPopup` →
+`switchBackground(Blank)` (a different template) → `switchBackground(Mixer)` again --
+photographed clean at every step, popup fully gone. Directly contradicts nothing already on
+record; it's a refinement of the Twenty-seventh/Thirty-second findings' "a genuine switch
+clears it" language -- turns out "genuine" specifically means the numeric template value has
+to move, not just that a real field write occurs.
+
+**Fix**: `DeviceState::resend_body()` (used by `show_popup`/`hide_popup`/`show_message`/
+`hide_message`, all of which restore `last_background` unchanged) now always bounces through
+a different template first -- `Background::Blank` (template 5) normally, or `Reset` (template
+0) specifically when the real target's own template IS 5 (Blank or Grid), so the bounce is
+never accidentally a no-op itself. Confirmed fixed live, from a totally fresh service process
+(no prior semantic `switchBackground` at all): the exact same photographed sequence that
+previously produced the garbled frame now renders a clean Mixer view with all 8 knob labels
+correct and no popup text bleed-through.
+
+**Follow-up, same session -- root-caused and fixed**: the bounce alone left a residual pair of
+blank (unlabeled) button-shaped outlines in the popup's old screen position (confirmed by
+comparing against a Background that never had a popup opened on it -- no such artifact there).
+Asked directly: "does that mean we also have to resend the footer?" Tested by sending CC 109
+(`screen_button_3_exit`, the INPUT CC an Esc-button press reports) as host->device output
+while a popup was open: it didn't close the popup, but it DID change one popup button's own
+label from `Esc` to `Tab4` -- direct proof the popup's `Esc`/`Enter` buttons are rendered
+through the SAME Footer slot (displayId 4, `menu_button`/tabs) as the normal tab row, and
+`switch_background_messages` had NEVER written to it at all. So whatever last touched that
+slot (the popup's own buttons, or ancient boot-time `Tab1`-`Tab5` demo content) lingered
+indefinitely -- nothing to do with Body at all. Fix: `DeviceState` now tracks `last_tabs`
+(defaulting to 5 real-but-blank `" "` placeholders -- non-empty so `indexed_entries` doesn't
+filter them out and skip the write) and resends it via `write_tabs` alongside every
+`switch_background`/`resend_body` call (bounce AND real target), plus a new `set_tabs`
+setter/`SetTabs` semantic command for a caller to actually control it. **Confirmed fully
+clean** on the next photograph: the same previously-ghosted sequence now shows all 8 Mixer
+knob labels correct AND a clean, evenly-blank 5-slot footer -- no residual button outlines at
+all.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical

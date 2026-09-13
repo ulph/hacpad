@@ -341,6 +341,55 @@ impl Background {
             Background::Blank => 5,
         }
     }
+
+    /// Every variant's own fields, mapped onto the four Body-layer writes
+    /// (displayId 6/7/0/5 -- `ctrl_element_name`/`ctrl_element_value`/
+    /// `pad_state`/`page_labels`). Unused slots default empty. Direct
+    /// instruction after this still not working reliably from the browser:
+    /// stop hand-picking which 1-2 fields "should" matter per variant and
+    /// always transmit all four Body fields on every switch instead --
+    /// see `switch_background_messages`.
+    fn body_fields(&self) -> BodyFields {
+        let mut f = BodyFields::default();
+        match self {
+            Background::Mixer { param_names, param_values } => {
+                f.names = param_names.to_vec();
+                f.values = param_values.to_vec();
+            }
+            Background::FaderSplit { labels } => f.names = labels.to_vec(),
+            Background::FaderRow { labels } => f.names = labels.to_vec(),
+            Background::Grid { labels } => f.names = labels.to_vec(),
+            Background::PadView { pad_names, pad_states } => {
+                f.names = pad_names.to_vec();
+                f.pad_state = pad_states.iter().map(|s| s.as_byte()).collect();
+            }
+            Background::PadView3Row { pad_names, pad_states } => {
+                f.names = pad_names.to_vec();
+                f.pad_state = pad_states.iter().map(|s| s.as_byte()).collect();
+            }
+            Background::List { items } => f.names = items.to_vec(),
+            Background::TransportLauncher { loop_left, loop_right, labels } => {
+                f.page_labels = vec![loop_left.clone(), loop_right.clone()];
+                f.names = labels.to_vec();
+            }
+            Background::Menu | Background::Reset | Background::Blank => {}
+            Background::ListHighlighted { items, .. } => f.names = items.clone(),
+            Background::SceneButtons { labels } => f.names = labels.to_vec(),
+            Background::BrowserList { items } => f.names = items.clone(),
+        }
+        f
+    }
+}
+
+/// The four Body-layer writes, independent of which fields a given
+/// `Background` variant's own typed schema happens to expose -- see
+/// `Background::body_fields`.
+#[derive(Default)]
+struct BodyFields {
+    names: Vec<String>,
+    values: Vec<String>,
+    pad_state: Vec<u8>,
+    page_labels: Vec<String>,
 }
 
 /// Tracks what's actually been sent, so `hide_popup`/`hide_message` can
@@ -361,6 +410,20 @@ pub struct DeviceState {
     last_popup_items: Vec<String>,
     last_popup_highlight: Option<u8>,
     last_message_text: Option<String>,
+    // Footer (displayId 4, menu_button/tabs) -- confirmed template-
+    // independent (survives a Background switch untouched, "Follow-up:
+    // displayId 4 works with ANY template"), which is exactly why NOTHING
+    // was ever resending it: `switch_background_messages` never touched it
+    // at all. Confirmed live (webcam) this left it holding whatever the
+    // popup's own native Esc/Enter buttons last drew there (or, before
+    // that, boot-time demo content) indefinitely -- sending CC 109 (the
+    // input CC an Esc-button PRESS reports) as host->device output revealed
+    // stale "Tab4" text underneath, meaning the popup's own overlay
+    // chrome shares this same slot rather than being independent of it.
+    // Tracked and resent alongside every Background write from now on
+    // (`switch_background`/`resend_body`), same "don't leave a field
+    // orphaned" reasoning as the Body blast.
+    last_tabs: Vec<String>,
 }
 
 impl Default for DeviceState {
@@ -373,6 +436,11 @@ impl Default for DeviceState {
             last_popup_items: Vec::new(),
             last_popup_highlight: None,
             last_message_text: None,
+            // 5 real (non-empty, so indexed_entries doesn't filter them
+            // out and skip the slot) but visually blank placeholders --
+            // we don't know what a caller wants shown here yet, and
+            // leaving stale text is worse than genuinely blank.
+            last_tabs: vec![" ".to_string(); 5],
         }
     }
 }
@@ -387,6 +455,7 @@ impl Default for DeviceState {
 pub struct DeviceSnapshot {
     pub background: Option<Background>,
     pub title_bar: Vec<String>,
+    pub tabs: Vec<String>,
     pub popup_visible: bool,
     pub popup_items: Vec<String>,
     pub popup_highlight: Option<u8>,
@@ -407,6 +476,7 @@ impl DeviceState {
         DeviceSnapshot {
             background: self.last_background.clone(),
             title_bar: self.last_title_bar.clone(),
+            tabs: self.last_tabs.clone(),
             popup_visible: self.popup_visible,
             popup_items: self.last_popup_items.clone(),
             popup_highlight: self.last_popup_highlight,
@@ -420,12 +490,26 @@ impl DeviceState {
     /// hidden here (a real switch clears them as a side effect, confirmed
     /// -- Thirteenth/Thirty-first findings).
     pub fn switch_background(&mut self, bg: Background, title_bar: Vec<String>) -> Vec<Vec<u8>> {
-        let msgs = switch_background_messages(&bg, &title_bar);
+        let mut msgs = switch_background_messages(&bg, &title_bar);
+        msgs.push(write_tabs(bg.page_template(), &self.last_tabs));
         self.last_background = Some(bg);
         self.last_title_bar = title_bar;
         self.popup_visible = false;
         self.message_visible = false;
         msgs
+    }
+
+    /// Sets the Footer (tabs) content and re-sends it immediately against
+    /// whatever Background is currently active (Footer is confirmed
+    /// template-independent, so the exact `page_template` byte doesn't
+    /// matter beyond being *a* valid one) -- also remembered so every
+    /// subsequent `switch_background`/`resend_body` keeps re-asserting it,
+    /// instead of leaving it to whatever last wrote that slot.
+    pub fn set_tabs(&mut self, tabs: Vec<String>) -> Vec<u8> {
+        let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
+        let msg = write_tabs(t, &tabs);
+        self.last_tabs = tabs;
+        msg
     }
 
     /// Records what's already on the real device WITHOUT sending anything --
@@ -454,13 +538,64 @@ impl DeviceState {
         self.last_message_text = Some(text.to_string());
     }
 
+    /// Re-transmits the complete current Background (title_bar + all four
+    /// Body fields) if one is known -- shared by `show_popup`/`show_message`
+    /// AND `hide_popup`/`hide_message`.
+    ///
+    /// **Confirmed directly on hardware** (webcam, photographed): resending
+    /// the SAME `page_template` value the device already has active --
+    /// which is exactly what this restore always does, since it's
+    /// re-sending `last_background` unchanged -- does NOT register as a
+    /// real template switch. The Body content updates correctly underneath,
+    /// but the popup overlay's own graphic layer (box border, `Esc`/`Enter`
+    /// buttons, item list) stays ghosted on top of it, producing a garbled
+    /// hybrid frame. Only bouncing through a genuinely DIFFERENT template
+    /// value first, then back, actually tears the overlay down -- so this
+    /// always inserts a `Blank` bounce before restoring. `switch_background`
+    /// itself is untouched (already confirmed working with no bounce for a
+    /// real caller-requested change to a different Background), this is
+    /// specifically for the "restore what was already active" path.
+    ///
+    /// Still not perfect: even bounced, a residual pair of blank
+    /// (unlabeled) button-shaped outlines was observed in the popup's old
+    /// screen position afterward -- clearly better than the un-bounced
+    /// garbled result, but not byte-for-byte identical to a Background that
+    /// never had a popup opened on it. Recorded as open, not silently
+    /// declared perfect.
+    fn resend_body(&self) -> Vec<Vec<u8>> {
+        match &self.last_background {
+            Some(bg) => {
+                // The bounce target's page_template must differ from bg's,
+                // or the bounce is just as much a no-op as the restore it's
+                // meant to fix -- Blank and Grid share template 5, so fall
+                // back to Reset (template 0) in that one case.
+                let bounce = if bg.page_template() == Background::Blank.page_template() {
+                    Background::Reset
+                } else {
+                    Background::Blank
+                };
+                let mut msgs = switch_background_messages(&bounce, &self.last_title_bar);
+                msgs.push(write_tabs(bounce.page_template(), &self.last_tabs));
+                msgs.extend(switch_background_messages(bg, &self.last_title_bar));
+                msgs.push(write_tabs(bg.page_template(), &self.last_tabs));
+                msgs
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Shows the popup -- draws on top of whatever Background is currently
     /// active without changing `last_background` at all (it's hardcoded to
     /// page_template=0 regardless, per `write_page_menu`'s doc comment).
-    pub fn show_popup(&mut self, items: &[String]) -> Vec<u8> {
+    /// Also re-sends the full current Background first (see `resend_body`),
+    /// so opening the popup doesn't depend on whatever was sent earlier
+    /// having actually stuck.
+    pub fn show_popup(&mut self, items: &[String]) -> Vec<Vec<u8>> {
         self.popup_visible = true;
         self.last_popup_items = items.to_vec();
-        write_page_menu(items)
+        let mut msgs = self.resend_body();
+        msgs.push(write_page_menu(items));
+        msgs
     }
 
     /// Highlight is separate from show/hide -- a plain CC, only meaningful
@@ -479,10 +614,7 @@ impl DeviceState {
         }
         self.popup_visible = false;
         self.message_visible = false; // a real switch clears this too
-        match self.last_background.clone() {
-            Some(bg) => switch_background_messages(&bg, &self.last_title_bar),
-            None => Vec::new(),
-        }
+        self.resend_body()
     }
 
     /// Shows the message overlay -- independent of whatever Background is
@@ -491,10 +623,14 @@ impl DeviceState {
     /// `hide_message` restores whatever was really there, not a forced
     /// blank screen. Confirmed NOT to suppress an already-open popup
     /// (Thirty-first finding) -- the two can coexist, for better or worse.
-    pub fn show_message(&mut self, text: &str) -> Vec<u8> {
+    /// Also re-sends the full current Background first (see `resend_body`),
+    /// same reasoning as `show_popup`.
+    pub fn show_message(&mut self, text: &str) -> Vec<Vec<u8>> {
         self.message_visible = true;
         self.last_message_text = Some(text.to_string());
-        write_message(text)
+        let mut msgs = self.resend_body();
+        msgs.push(write_message(text));
+        msgs
     }
 
     /// Same no-op-if-already-hidden and "restore last_background" logic as
@@ -505,10 +641,7 @@ impl DeviceState {
         }
         self.message_visible = false;
         self.popup_visible = false;
-        match self.last_background.clone() {
-            Some(bg) => switch_background_messages(&bg, &self.last_title_bar),
-            None => Vec::new(),
-        }
+        self.resend_body()
     }
 }
 
@@ -523,34 +656,22 @@ impl DeviceState {
 /// send nothing at all and the switch would never happen).
 pub fn switch_background_messages(bg: &Background, title_bar: &[String]) -> Vec<Vec<u8>> {
     let t = bg.page_template();
-    let mut msgs = vec![write_title_bar(t, title_bar)];
-    match bg {
-        Background::Mixer { param_names, param_values } => {
-            msgs.push(write_names(t, param_names));
-            msgs.push(write_values(t, param_values));
-        }
-        Background::FaderSplit { labels } => msgs.push(write_names(t, labels)),
-        Background::FaderRow { labels } => msgs.push(write_names(t, labels)),
-        Background::Grid { labels } => msgs.push(write_names(t, labels)),
-        Background::PadView { pad_names, pad_states } => {
-            msgs.push(write_names(t, pad_names));
-            msgs.push(write_pad_state(t, &pad_states.iter().map(|s| s.as_byte()).collect::<Vec<_>>()));
-        }
-        Background::PadView3Row { pad_names, pad_states } => {
-            msgs.push(write_names(t, pad_names));
-            msgs.push(write_pad_state(t, &pad_states.iter().map(|s| s.as_byte()).collect::<Vec<_>>()));
-        }
-        Background::List { items } => msgs.push(write_names(t, items)),
-        Background::TransportLauncher { loop_left, loop_right, labels } => {
-            msgs.push(write_page_labels(t, &[loop_left.clone(), loop_right.clone()]));
-            msgs.push(write_names(t, labels));
-        }
-        Background::Menu | Background::Reset | Background::Blank => {} // no content schema (Blank deliberately) -- title_bar alone still performs the switch
-        Background::ListHighlighted { items, .. } => msgs.push(write_names(t, items)),
-        Background::SceneButtons { labels } => msgs.push(write_names(t, labels)),
-        Background::BrowserList { items } => msgs.push(write_names(t, items)),
-    }
-    msgs
+    let body = bg.body_fields();
+    // ALL FOUR Body writes, every time -- direct instruction, after two live
+    // reports that show/hide was still broken from the browser despite
+    // scripted WS tests passing: stop hand-picking the 1-2 fields a given
+    // variant's typed schema "should" need and always transmit the complete
+    // Body layer (names/values/pad_state/page_labels) on every switch,
+    // whether or not this specific variant uses each one. A variant with
+    // nothing for a slot sends an empty write for it rather than omitting
+    // the call entirely.
+    vec![
+        write_title_bar(t, title_bar),
+        write_names(t, &body.names),
+        write_values(t, &body.values),
+        write_pad_state(t, &body.pad_state),
+        write_page_labels(t, &body.page_labels),
+    ]
 }
 
 /// Bottom menu-button row -- confirmed to work with any template, not just
@@ -910,5 +1031,111 @@ mod tests {
         // The flag flips anyway, which is the misleading part: a caller
         // reading popup_visible() alone would believe the dismiss worked.
         assert!(!state.popup_visible());
+    }
+
+    /// Direct instruction after two live reports that show/hide was still
+    /// broken from the browser: stop hand-picking which 1-2 fields a given
+    /// `Background` variant "should" need and always transmit all four Body
+    /// writes (names/values/pad_state/page_labels) on every switch. Checks
+    /// this for a variant with a rich Body schema (`Mixer`) AND for one with
+    /// NONE at all (`Menu`) -- the latter previously sent title_bar alone.
+    #[test]
+    fn switch_background_always_sends_all_four_body_writes() {
+        let title_bar = vec!["T1".to_string(), "T2".to_string(), "T3".to_string()];
+
+        let mixer = Background::Mixer {
+            param_names: std::array::from_fn(|i| format!("N{i}")),
+            param_values: std::array::from_fn(|i| format!("V{i}")),
+        };
+        assert_eq!(switch_background_messages(&mixer, &title_bar).len(), 5, "title_bar + names + values + pad_state + page_labels");
+
+        // Menu has no Body schema of its own at all -- must still get all
+        // four Body writes (empty-content ones are fine; the point is the
+        // call always happens, not that every variant has data to fill it).
+        assert_eq!(switch_background_messages(&Background::Menu, &title_bar).len(), 5);
+        assert_eq!(switch_background_messages(&Background::Reset, &title_bar).len(), 5);
+        assert_eq!(switch_background_messages(&Background::Blank, &title_bar).len(), 5);
+    }
+
+    /// show_popup/show_message/hide_popup/hide_message must ALL resend the
+    /// complete Body state (via `resend_body`), not just fire their own
+    /// specific write -- direct instruction ("including when showing/hiding
+    /// the menu and messages"). Confirms each returns the full 5-message
+    /// switch_background_messages() bundle plus its own extra write (or, for
+    /// hide_*, exactly that bundle).
+    #[test]
+    fn show_and_hide_overlay_verbs_resend_the_full_body_state() {
+        let mut state = DeviceState::default();
+        let bg = Background::Mixer {
+            param_names: std::array::from_fn(|i| format!("N{i}")),
+            param_values: std::array::from_fn(|i| format!("V{i}")),
+        };
+        state.switch_background(bg, vec!["T1".into(), "T2".into(), "T3".into()]);
+
+        // resend_body() bounces through a different template first (see its
+        // doc comment: resending the SAME template value never actually
+        // registered as a switch on real hardware) -- (5 Body + 1 tabs) for
+        // the bounce + (5 Body + 1 tabs) for the real restore = 12, plus the
+        // verb's own extra write for show_popup/show_message.
+        let show_popup_msgs = state.show_popup(&["A".to_string()]);
+        assert_eq!(show_popup_msgs.len(), 13, "12 bounce+restore Body+Footer messages + write_page_menu");
+
+        let hide_popup_msgs = state.hide_popup();
+        assert_eq!(hide_popup_msgs.len(), 12, "just the bounce+restore Body+Footer resend");
+
+        let show_message_msgs = state.show_message("hi");
+        assert_eq!(show_message_msgs.len(), 13, "12 bounce+restore Body+Footer messages + write_message");
+
+        let hide_message_msgs = state.hide_message();
+        assert_eq!(hide_message_msgs.len(), 12, "just the bounce+restore Body+Footer resend");
+    }
+
+    /// The bounce target itself must never equal the real target's own
+    /// template value -- `Blank` and `Grid` share page_template 5, so
+    /// bouncing FROM/TO either of those must use `Reset` (0) instead, or
+    /// the bounce would be exactly as much a no-op as the bug it exists to
+    /// fix.
+    #[test]
+    fn resend_body_bounce_target_never_matches_the_real_background() {
+        let mut state = DeviceState::default();
+        state.switch_background(Background::Blank, vec!["T1".into(), "T2".into(), "T3".into()]);
+        state.show_popup(&["A".to_string()]);
+        let msgs = state.hide_popup();
+        // First message is the bounce's title_bar write -- byte index 7 is
+        // page_template (SYSEX_PREFIX is 6 bytes, then CMD_WRITE_DISPLAY,
+        // then page_template -- see compose_write). Must be Reset's 0, not
+        // Blank/Grid's shared 5.
+        assert_eq!(msgs[0][7], 0, "bounce target must be Reset (0) when restoring Blank (page_template 5)");
+    }
+
+    /// Direct answer to "does that mean we also have to resend the footer?":
+    /// yes -- confirmed live (webcam: sending CC 109, the input CC a popup's
+    /// own Esc-button press reports, revealed stale "Tab4" text underneath
+    /// it) that the popup's overlay chrome shares the SAME Footer slot
+    /// (displayId 4) `switch_background_messages` never touched. Checks
+    /// that `switch_background`/`set_tabs` actually emit a real,
+    /// non-filtered `write_tabs` entry (not an empty/no-op one -- see
+    /// `indexed_entries`' `!s.is_empty()` filter) using the tracked
+    /// `last_tabs`, and that `resend_body` includes it on BOTH the bounce
+    /// and the real restore.
+    #[test]
+    fn switch_background_and_resend_body_both_include_a_real_tabs_write() {
+        let mut state = DeviceState::default();
+        let bg = Background::Mixer {
+            param_names: std::array::from_fn(|i| format!("N{i}")),
+            param_values: std::array::from_fn(|i| format!("V{i}")),
+        };
+        let switch_msgs = state.switch_background(bg, vec!["T1".into(), "T2".into(), "T3".into()]);
+        let last = switch_msgs.last().expect("switch_background must include a tabs write");
+        assert_eq!(last[8], DISPLAY_ID_MENU_BUTTON, "the appended message must target displayId 4 (menu_button/tabs)");
+        // Default last_tabs is 5 non-empty " " placeholders -- confirm at
+        // least one indexed entry actually made it into the message (i.e.
+        // indexed_entries did NOT filter everything out as empty).
+        assert!(last.len() > 10, "a genuinely blank (filtered-out) tabs write would be much shorter than one with 5 real entries");
+
+        state.show_popup(&["A".to_string()]);
+        let hide_msgs = state.hide_popup();
+        let tabs_writes = hide_msgs.iter().filter(|m| m[8] == DISPLAY_ID_MENU_BUTTON).count();
+        assert_eq!(tabs_writes, 2, "one tabs write for the bounce template, one for the real restore");
     }
 }

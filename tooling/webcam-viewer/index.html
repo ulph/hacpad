@@ -356,6 +356,17 @@
     </fieldset>
 
     <fieldset>
+      <label>Footer (displayId 4 -- menu_button/tabs) -- reuses in-tabs above</label>
+      <div style="font-size:10px; color:#666; margin-bottom:6px;">
+        Confirmed (Thirty-eighth finding): the popup's own Esc/Enter buttons share this SAME
+        slot -- switchBackground never touched it before, so it held stale content
+        indefinitely. Now resent automatically on every Switch/Show/Hide above; use this
+        button only to change what that resend actually contains.
+      </div>
+      <button id="sem-tabs-btn" type="button">Set Tabs</button>
+    </fieldset>
+
+    <fieldset>
       <label>Popup (displayId 8) -- reuses in-menuitems / in-menuhighlight above</label>
       <div class="row" style="gap:6px;">
         <button id="sem-popup-show-btn" type="button">Show Popup</button>
@@ -1014,6 +1025,10 @@ el('sem-message-show-btn').addEventListener('click', () => {
 });
 el('sem-message-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hideMessage' }));
 
+el('sem-tabs-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'setTabs', tabs: csv(el('in-tabs').value) });
+});
+
 // Rendered from `{"semanticState": ...}` messages -- see DeviceState::snapshot()
 // in lib.rs. Software mirror only (no device read-back exists), same honesty
 // as the Rust side.
@@ -1023,7 +1038,7 @@ function applySemanticState(state) {
   const popup = state.popupVisible ? `visible (${(state.popupItems || []).length} items, highlight ${state.popupHighlight ?? '-'})` : 'hidden';
   const message = state.messageVisible ? `visible ("${state.messageText || ''}")` : 'hidden';
   el('semantic-status').textContent =
-    `background: ${bgType}  |  titleBar: ${(state.titleBar || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
+    `background: ${bgType}  |  titleBar: ${(state.titleBar || []).join('/')}  |  tabs: ${(state.tabs || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
 }
 
 renderSimulator();

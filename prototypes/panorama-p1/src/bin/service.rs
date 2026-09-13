@@ -181,6 +181,7 @@ enum SemanticCommand {
     HidePopup,
     ShowMessage { text: String },
     HideMessage,
+    SetTabs { tabs: Vec<String> },
 }
 
 struct Device {
@@ -274,7 +275,9 @@ impl Device {
                 }
             }
             SemanticCommand::ShowPopup { items } => {
-                self.default_conn.send(&self.device_state.show_popup(&items))?;
+                for msg in self.device_state.show_popup(&items) {
+                    self.default_conn.send(&msg)?;
+                }
             }
             SemanticCommand::SetPopupHighlight { row } => {
                 let msg = self.device_state.set_popup_highlight(row);
@@ -286,12 +289,17 @@ impl Device {
                 }
             }
             SemanticCommand::ShowMessage { text } => {
-                self.default_conn.send(&self.device_state.show_message(&text))?;
+                for msg in self.device_state.show_message(&text) {
+                    self.default_conn.send(&msg)?;
+                }
             }
             SemanticCommand::HideMessage => {
                 for msg in self.device_state.hide_message() {
                     self.default_conn.send(&msg)?;
                 }
+            }
+            SemanticCommand::SetTabs { tabs } => {
+                self.default_conn.send(&self.device_state.set_tabs(tabs))?;
             }
         }
         Ok(())

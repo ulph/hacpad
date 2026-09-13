@@ -89,13 +89,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         println!("2) show_popup...");
         let items = vec!["Item1".into(), "Item2".into(), "Item3".into()];
-        default_conn.send(&state.show_popup(&items))?;
-        sleep(Duration::from_millis(50));
+        for msg in state.show_popup(&items) {
+            default_conn.send(&msg)?;
+            sleep(Duration::from_millis(50));
+        }
         default_conn.send(&state.set_popup_highlight(2))?;
         sleep(Duration::from_secs(2));
 
         println!("3) show_message (on top of background+popup)...");
-        default_conn.send(&state.show_message("OVERLAY TEST"))?;
+        for msg in state.show_message("OVERLAY TEST") {
+            default_conn.send(&msg)?;
+            sleep(Duration::from_millis(50));
+        }
         sleep(Duration::from_secs(10));
 
         println!("4) hide_message (should restore Mixer background; popup also cleared per the model)...");

@@ -21,7 +21,7 @@ layer** it belongs to, and **what kind of mutability** it has.
 | **Footer** (bottom strip) | `menu_button`(4) | Same State-class persistence as Header, kept as its own row since it's a physically separate strip (bottom of screen vs. top) that happens to share Header's mutability — "Chrome" as a single lumped category was conflating position with mutability class; split per direct request. |
 | **Background** | `page_template`: see the full table below | Mutually exclusive — exactly one is "active." Switching to a different one clears Body, whether or not the switching write touches it (Fourteenth finding). |
 | **Body** (the Background's own content area) | `ctrl_element_name`(6), `ctrl_element_value`(7), `pad_state`(0), `page_labels`(5) | Content-class: cleared by any real Background switch. Rendered differently by every Background (that's *what makes* a Background visually distinct) — see table. `page_labels` renders "near the first knob position" (Nineteenth finding), i.e. inside the Body area, not Header/Footer, despite being chrome-*adjacent* in earlier framing. |
-| **Overlay** | popup menu (displayId 8, hardcoded `page_template=0`) | Draws on top of whatever Background+Header+Footer+Body is showing, without changing which Background is "official." Confirmed to overlay `drum_pads`(21) cleanly without disturbing it (Twenty-seventh finding). |
+| **Overlay** | popup menu (displayId 8, hardcoded `page_template=0`) | Draws on top of whatever Background+Header+Footer+Body is showing, without changing which Background is "official." Confirmed to overlay `drum_pads`(21) cleanly without disturbing it (Twenty-seventh finding). **Its own `Esc`/`Enter` buttons render through the Footer's own displayId (4, `menu_button`) rather than an independent slot** (Thirty-eighth finding) -- so Overlay isn't purely additive on top of Footer, it temporarily *owns* it, and dismissing the popup requires re-asserting Footer content, not just Background/Body. |
 | **Message** (exclusive mode) | `pageTemplate=1` one-shot write | Own separate SysEx pathway (Seventh finding), not a compose-path Background at all. Used dozens of times this whole project as the "force back to a clean state" trick, successfully, from every kind of prior state — confirms Message suppresses Header/Footer/Background/Body regardless of what preceded it. **Its interaction with an open Overlay is unsettled, contradictory evidence**: the Thirty-first finding saw the popup's highlighted bars still drawn on top of "hacpad" text (Message *below* Overlay in z-order); a later, cleaner test (`verb_test overlaytest`: switch_background → show_popup → show_message, in that exact order) showed Message rendering **completely alone**, no popup bleed-through at all. Not reconciled — may be order/prior-state-dependent (the earlier test's popup may have been "stale" from much earlier in that session rather than freshly shown right before Message, unlike the later test). Treat as open, not settled either direction. |
 
 **Background table** (all confirmed on hardware, Tenth/Fifteenth/Sixteenth findings):
@@ -253,3 +253,12 @@ code at all**. Partially closed this session:
   semantic `hidePopup`/`hideMessage` after mixing the two can restore a Background that no
   longer matches what a raw edit put on screen. Boot state is seeded correctly (Thirty-seventh
   finding), but nothing keeps the two in sync after that.
+- ~~Residual blank button outlines after hiding a popup~~ — root-caused and fixed: the
+  popup's own `Esc`/`Enter` buttons share the Footer slot (displayId 4, `menu_button`/tabs)
+  with the normal tab row, which nothing was resending. `DeviceState` now tracks/resends
+  `last_tabs` alongside every Background write. Confirmed clean on hardware (Thirty-eighth
+  finding, protocol notes).
+- Footer (`tabs`) now defaults to 5 blank placeholders and is fully caller-controllable
+  (`set_tabs`/`SetTabs`), but nothing has driven real tab labels through this path yet —
+  untested whether a Background switch's bounce-then-restore sequence looks visually
+  jarring (two full-screen flips) if real (non-blank) tab content is showing throughout.
