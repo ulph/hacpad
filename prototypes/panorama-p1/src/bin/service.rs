@@ -104,6 +104,13 @@ struct ScreenUpdate {
     // "Thirty-third finding"). 0-1023, matching the real observer's own scale.
     #[serde(default, rename = "cursorVolume")]
     cursor_volume: Option<u16>,
+    // The 4-LED status strip (CC 99-102) -- CONFIRMED a hardware mutex (one
+    // register, not 4 bits), see STATUS_LED_CCS/status_led_messages in
+    // lib.rs ("Thirty-fifth finding"). `Some(1..=4)` selects that position,
+    // `Some(0)` (or any other value) clears all four, `None` means "leave
+    // alone". Deliberately its own field, not folded into `ledsOn`.
+    #[serde(default, rename = "statusLed")]
+    status_led: Option<u8>,
 }
 
 /// The state a freshly-started service applies to the real device and hands
@@ -129,6 +136,7 @@ fn default_state() -> ScreenUpdate {
         message: "hacpad".to_string(), // the established resting-baseline text (see the "hacpad" note in the protocol notes)
         leds_on: Some(vec![16, 18, 20, 22, 106, 108, 110, 80, 85]), // arbitrary mix so both on/off states show
         cursor_volume: Some(768), // arbitrary non-zero demo value (0-1023 scale)
+        status_led: Some(1), // Status1 -- demo default; this group is a mutex, see status_led_messages
     }
 }
 
@@ -202,6 +210,12 @@ impl Device {
         if let Some(v) = update.cursor_volume {
             for msg in cursor_volume_messages(v) {
                 self.default_conn.send(&msg)?;
+            }
+        }
+        if let Some(pos) = update.status_led {
+            for msg in status_led_messages(if pos == 0 { None } else { Some(pos) }) {
+                self.default_conn.send(&msg)?;
+                thread::sleep(Duration::from_millis(2));
             }
         }
         Ok(())

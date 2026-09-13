@@ -283,15 +283,48 @@ pub const LED_CCS: &[u8] = &[
     84, // transport Play
     85, // transport Record
     29, // arranger automation write -- CONFIRMED on hardware: toggling this produces no visible effect
-    99, // CONFIRMED on hardware: NOT the F-Keys button's own backlight -- lights the first of a row of
-        // 4 small status LEDs above the screen. The other 3 in that strip have no known CC yet.
     30, // Mute -- cursorTrack.getMute(), CONFIRMED from source: SAME CC drives both the input toggle
         // (`case CC.30: cursorTrack.getMute().toggle()`) and this LED feedback -- standard pattern,
         // found via a fuller re-grep of every literal sendChannelController call site.
     31, // Solo -- cursorTrack.getSolo(), same pattern as Mute (CC 30) above.
     25, // a genuine sendChannelController call site (tied to menuButtonLabel text), but NOT yet
         // characterized -- included here as a live-testable candidate, not a confirmed LED.
+    // NOTE: 99/100/101/102 (the 4-LED status strip) are deliberately NOT in this list -- see
+    // STATUS_LED_CCS/status_led_messages below. They are not 4 independent on/off bits like every
+    // other entry here; folding them into this generic list would actively misbehave (see that doc
+    // comment for why).
 ];
+
+/// The 4-LED status strip above the screen -- ALL FOUR CCs CONFIRMED on hardware (Thirty-fifth
+/// finding), each simultaneously the LED for one status position AND the input handler previously
+/// tentatively labeled "browser_cancel_1/2/3"/"f_keys" in main.rs (same "one CC for input and LED"
+/// pattern as everything else on this device). Index 0 = Status1 (CC 99, leftmost) ... index 3 =
+/// Status4 (CC 102, rightmost).
+///
+/// **CONFIRMED HARDWARE MUTEX -- directly demonstrated, not assumed from testing each in isolation**:
+/// set CC99=127 (position 1 lights), then set CC100=127 WITHOUT ever sending CC99=0 -- position 1 goes
+/// dark and position 2 lights (confirmed for both an adjacent pair and a non-adjacent pair). **Further
+/// confirmed**: sending 0 to ANY of these 4 CCs -- not just the one currently lit -- clears whichever
+/// position is showing. So this is genuinely **one hardware register**, not 4 independent bits: "set
+/// current status to position N" (write 127 to CC 98+N) and "clear" (write 0 to any of the 4), not
+/// "toggle this specific LED". `led_cc_messages`'s generic "resend every LED_CCS entry, 127 or 0" loop
+/// would misbehave applied to this group: whichever of these 4 CCs is iterated LAST with a 0 would
+/// clear an already-applied 127 from earlier in the same batch, regardless of intent. Use
+/// `status_led_messages` instead, which always clears first and sets second so the final state is
+/// always correct regardless of prior state.
+pub const STATUS_LED_CCS: &[u8] = &[99, 100, 101, 102];
+
+/// `position`: `Some(1..=4)` to light that status position, `None` (or any other value) to clear all
+/// four. Always emits a clear message first, then (if a valid position was given) the set message --
+/// this ordering is what makes the result correct regardless of whatever was showing before, given the
+/// confirmed "0 on any of the 4 clears the shared register" behavior documented above.
+pub fn status_led_messages(position: Option<u8>) -> Vec<[u8; 3]> {
+    let mut msgs = vec![cc_message(STATUS_LED_CCS[0], 0)]; // clear first, always
+    if let Some(p @ 1..=4) = position {
+        msgs.push(cc_message(STATUS_LED_CCS[(p - 1) as usize], 127));
+    }
+    msgs
+}
 
 /// One CC message per entry in `LED_CCS`, each set to on (127) if that CC
 /// appears in `on`, else off (0) -- a full resync of every known LED rather

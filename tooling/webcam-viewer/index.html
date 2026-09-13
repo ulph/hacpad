@@ -147,7 +147,7 @@
     </fieldset>
 
     <fieldset>
-      <label>message (pageTemplate 1)</label>
+      <label><input type="checkbox" id="chk-message-enabled" style="width:auto; display:inline;"> message (pageTemplate 1)</label>
       <input type="text" id="in-message-overlay" value="" maxlength="127">
     </fieldset>
 
@@ -193,7 +193,7 @@
     </fieldset>
 
     <fieldset>
-      <label>displayId 8 -- page_menu</label>
+      <label><input type="checkbox" id="chk-popup-enabled" style="width:auto; display:inline;"> displayId 8 -- page_menu</label>
       <input type="text" id="in-menuitems" value="">
       <label>CC 111 -- selectedMenuItem</label>
       <input type="text" id="in-menuhighlight" value="">
@@ -202,6 +202,11 @@
     <fieldset>
       <label>LEDs (CC, on/off)</label>
       <div id="led-panel"></div>
+    </fieldset>
+
+    <fieldset>
+      <label>Status strip (CC 99-102 -- mutex, one of 5 states, not 4 checkboxes)</label>
+      <div id="status-led-panel" style="display:flex; gap:10px; margin-top:4px;"></div>
     </fieldset>
 
     <fieldset>
@@ -219,18 +224,52 @@
 function el(id) { return document.getElementById(id); }
 function csv(s) { return s.split(',').map(x => x.trim()); }
 
-// See lib.rs's LED_CCS -- kept in sync by hand, same 18 CCs, same order.
-// `cc: null` entries are placeholders for LEDs we know exist (seen on real
-// hardware) but whose CC is still unfound -- rendered disabled/dashed rather
-// than silently omitted, so the gap stays visible instead of looking like an
-// oversight. See checklist item 11 / "Thirty-third finding".
+// See lib.rs's LED_CCS -- kept in sync by hand, same order. Deliberately
+// excludes CC 99-102 (the status strip): confirmed a hardware mutex (one
+// register, not 4 independent bits -- "Thirty-fifth finding"), handled by
+// its own single-select control (#status-led-panel) below instead of a
+// checkbox here, since checkboxes would misrepresent it as independently
+// toggleable.
 const LED_DEFS = [
   [16, 'Sel1'], [17, 'Sel2'], [18, 'Sel3'], [19, 'Sel4'], [20, 'Sel5'], [21, 'Sel6'], [22, 'Sel7'], [23, 'Sel8'],
   [106, 'Menu1'], [107, 'Menu2'], [108, 'Menu3'], [109, 'Menu4'], [110, 'Menu5'],
   [80, 'Loop'], [84, 'Play'], [85, 'Record'], [29, 'AutoWr(?)'],
-  [99, 'Status1'], [null, 'Status2'], [null, 'Status3'], [null, 'Status4'],
   [30, 'Mute'], [31, 'Solo'], [25, 'CC25(?)'],
 ];
+
+// The 4-LED status strip -- CONFIRMED mutex (Thirty-fifth finding): index 0 =
+// Status1/CC99 (leftmost) .. index 3 = Status4/CC102 (rightmost). 5 states
+// total: 0 = off, 1-4 = that position lit. A single-select control (radio
+// buttons), not 4 checkboxes, since only one can ever be lit at a time --
+// directly demonstrated (not assumed): setting one CC=127 without ever
+// clearing another turns the other off, and 0 sent to ANY of the 4 clears
+// whichever is showing.
+const STATUS_LED_CCS = [99, 100, 101, 102];
+
+function buildStatusLedPanel() {
+  const panel = el('status-led-panel');
+  panel.innerHTML = '';
+  const mkOption = (value, label) => {
+    const item = document.createElement('label');
+    item.style.cssText = 'display:flex; align-items:center; gap:3px; font-size:9px; color:#aaa;';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'status-led';
+    radio.value = value;
+    radio.addEventListener('change', () => pushToDevice());
+    item.appendChild(radio);
+    item.appendChild(document.createTextNode(label));
+    panel.appendChild(item);
+    return radio;
+  };
+  mkOption('0', 'Off').checked = true;
+  STATUS_LED_CCS.forEach((cc, i) => mkOption(String(i + 1), `Status${i + 1}`));
+}
+
+function statusLedValue() {
+  const checked = document.querySelector('input[name="status-led"]:checked');
+  return checked ? parseInt(checked.value, 10) : 0;
+}
 
 function buildLedPanel() {
   const panel = el('led-panel');
@@ -258,6 +297,7 @@ function buildLedPanel() {
   });
 }
 buildLedPanel();
+buildStatusLedPanel();
 
 function ledsOnList() {
   return [...document.querySelectorAll('.led-dot.on')].map(d => parseInt(d.dataset.cc, 10));
@@ -418,7 +458,7 @@ function renderContent() {
 }
 
 function renderPopupMenu() {
-  const items = csv(el('in-menuitems').value).filter(Boolean);
+  const items = el('chk-popup-enabled').checked ? csv(el('in-menuitems').value).filter(Boolean) : [];
   const box = el('popup-menu');
   if (items.length === 0) { box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
@@ -444,10 +484,30 @@ function renderSimulator() {
   // pageTemplate=1 message overlay -- a separate rendering pathway on real
   // hardware, so it takes over the whole mock screen the same way, hiding
   // everything else drawn above rather than compositing with it.
-  const msg = el('in-message-overlay').value;
+  const msg = el('chk-message-enabled').checked ? el('in-message-overlay').value : '';
   const overlay = el('message-overlay');
   overlay.hidden = !msg;
   overlay.textContent = msg;
+}
+
+// Both the message overlay and the popup menu are one-shot rendering
+// pathways that, per hardware testing (Twenty-seventh/Thirty-first
+// findings), are NOT cleared by sending an empty write to their own field --
+// only a genuine page_template switch dismisses either one. So "turning an
+// overlay off" isn't "send nothing", it's "force a real template switch" --
+// this is that action, shared by both checkboxes below since dismissing one
+// this way dismisses both (there's no way to clear just one while leaving
+// the other showing).
+function dismissOverlay() {
+  clearTimeout(pushTimer);
+  el('chk-message-enabled').checked = false;
+  el('chk-popup-enabled').checked = false;
+  const cur = currentState(); // message='' and menuItems=[] now that both checkboxes are unchecked
+  sendField(cur.layout, { titleBar: cur.titleBar });
+  lastSent.titleBar = cur.titleBar;
+  lastSent.message = cur.message;
+  lastSent.menuItems = cur.menuItems;
+  renderSimulator();
 }
 
 // Bidirectional, but NOT via this page's own HTTP server: the browser talks
@@ -515,7 +575,7 @@ connectService();
 let lastSent = {
   layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null,
   currentValue: null, pageLabels: null, padState: null, menuItems: null, menuHighlight: null,
-  message: null, ledsOn: null, cursorVolume: null,
+  message: null, ledsOn: null, cursorVolume: null, statusLed: null,
 };
 
 function arraysEqual(a, b) {
@@ -537,11 +597,18 @@ function currentState() {
     currentValue: el('in-current-value').value,
     pageLabels: csv(el('in-pagelabels').value),
     padState: padStateList(),
-    menuItems: csv(el('in-menuitems').value).filter(Boolean),
+    // Gated by their "enabled" checkbox -- unchecked reports empty regardless
+    // of the text field's content, matching the server's "empty = don't
+    // touch" guard. Actually DISMISSING an already-shown overlay needs more
+    // than sending empty though (see dismissOverlay()) -- both are one-shot/
+    // overlay pathways that only a real template switch clears, never their
+    // own empty write.
+    menuItems: el('chk-popup-enabled').checked ? csv(el('in-menuitems').value).filter(Boolean) : [],
     menuHighlight: parseInt(el('in-menuhighlight').value, 10) || 0,
-    message: el('in-message-overlay').value,
+    message: el('chk-message-enabled').checked ? el('in-message-overlay').value : '',
     ledsOn: ledsOnList(),
     cursorVolume: parseInt(el('in-cursorvolume').value, 10) || 0,
+    statusLed: statusLedValue(),
   };
 }
 
@@ -584,6 +651,7 @@ function pushToDevice() {
         names: cur.names, values: cur.values, padState: cur.padState, pageLabels: cur.pageLabels,
         menuItems: lastSent.menuItems, menuHighlight: lastSent.menuHighlight,
         message: lastSent.message, ledsOn: lastSent.ledsOn, cursorVolume: lastSent.cursorVolume,
+        statusLed: lastSent.statusLed,
       };
       return;
     }
@@ -650,6 +718,12 @@ function pushToDevice() {
       sendField(cur.layout, { cursorVolume: cur.cursorVolume });
       lastSent.cursorVolume = cur.cursorVolume;
     }
+    // Status strip (CC 99-102) -- a mutex, sent as a single 0-4 value, not
+    // per-CC checkboxes; unrelated to page_template.
+    if (cur.statusLed !== lastSent.statusLed) {
+      sendField(cur.layout, { statusLed: cur.statusLed });
+      lastSent.statusLed = cur.statusLed;
+    }
   }, 350);
 }
 
@@ -673,6 +747,13 @@ function sendFullState() {
   lastSent = Object.assign({}, cur);
 }
 el('full-sync-btn').addEventListener('click', sendFullState);
+
+// Unchecking either overlay checkbox needs the real dismiss action, not just
+// "stop sending this field" (see dismissOverlay()'s doc comment). Checking
+// one just falls through to the generic #controls input listener above,
+// which already re-renders and pushes normally.
+el('chk-message-enabled').addEventListener('change', (e) => { if (!e.target.checked) dismissOverlay(); });
+el('chk-popup-enabled').addEventListener('change', (e) => { if (!e.target.checked) dismissOverlay(); });
 
 renderSimulator();
 </script>
@@ -702,15 +783,25 @@ function applyScreenPush(push, force) {
   if (push.currentValue !== undefined) el('in-current-value').value = push.currentValue;
   if (push.pageLabels) el('in-pagelabels').value = push.pageLabels.join(',');
   if (push.padState) el('in-padstate').value = push.padState.join(',');
-  if (push.menuItems) el('in-menuitems').value = push.menuItems.join(',');
+  if (push.menuItems) {
+    el('in-menuitems').value = push.menuItems.join(',');
+    el('chk-popup-enabled').checked = push.menuItems.length > 0;
+  }
   if (push.menuHighlight !== undefined) el('in-menuhighlight').value = push.menuHighlight;
-  if (push.message !== undefined) el('in-message-overlay').value = push.message;
+  if (push.message !== undefined) {
+    el('in-message-overlay').value = push.message;
+    el('chk-message-enabled').checked = !!push.message;
+  }
   if (push.ledsOn) {
     document.querySelectorAll('.led-dot').forEach(d => {
       d.classList.toggle('on', push.ledsOn.includes(parseInt(d.dataset.cc, 10)));
     });
   }
   if (push.cursorVolume !== undefined) el('in-cursorvolume').value = push.cursorVolume;
+  if (push.statusLed !== undefined) {
+    const r = document.querySelector(`input[name="status-led"][value="${push.statusLed}"]`);
+    if (r) r.checked = true;
+  }
   renderSimulator();
 
   // This push is itself a record of what's actually on the device (from this
@@ -731,6 +822,7 @@ function applyScreenPush(push, force) {
   if (push.message !== undefined) lastSent.message = push.message;
   if (push.ledsOn) lastSent.ledsOn = push.ledsOn;
   if (push.cursorVolume !== undefined) lastSent.cursorVolume = push.cursorVolume;
+  if (push.statusLed !== undefined) lastSent.statusLed = push.statusLed;
 }
 
 // Purely hot-reload now (mtime check) -- state sync is the WebSocket's job

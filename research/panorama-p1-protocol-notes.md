@@ -1826,6 +1826,62 @@ does ignoring it contribute to the session-invalidation behavior above?).
 13/25/30/31, all 4 SurfaceStatus payloads); whether `service.rs` should detect a silently-ignored write
 and auto-recover by re-sending init is an open design question, not yet implemented.
 
+### Thirty-fifth finding: the 4-LED status strip fully solved — CC 99-102, one register not four bits
+
+Directly prompted ("go back to the cc recordings when I pressed all buttons" / "find a way to control
+the LED status of the statusN, either individually or as a mutex"). The recorded button-press log
+(`live_listener.log`, ~500 lines from an earlier live-mapping session) only confirmed CCs 80-103 and
+106-111 were ever pressed -- nothing new there (and notably CC 104/105 never fired despite an apparently
+thorough press-everything session, reinforcing they're not reachable via a normal button). The real
+answer came from replaying every already-known input CC directly against the device while photographing
+*only* the status strip, isolated one CC at a time from a forced-clean baseline (critical: an earlier
+non-isolated batch run gave a false lead from stale state left over by the service's own default LED
+demo list, which includes CC 80 -- always force `ledsOn: []` before a clean test).
+
+**Fully confirmed, one CC at a time, clean before/after photos**: CC 99 = Status1 (leftmost), **CC 100 =
+Status2**, **CC 101 = Status3**, **CC 102 = Status4** (rightmost) -- a contiguous 4-CC block, exactly
+the CCs already tentatively identified from source as "browser_cancel_1/2/3" (100/101/102) and F-Keys
+(99) input handlers. Same "one CC serves as both the input handler AND the LED" pattern as every other
+control on this device.
+
+**The mutex was directly demonstrated, not assumed from testing each CC in isolation** (a real risk
+flagged mid-investigation): set CC99=127 (position 1 lights), then set CC100=127 **without ever sending
+CC99=0** -- position 1 goes dark, position 2 lights. Repeated for a non-adjacent pair (CC102 then CC99)
+with the same result. **Further confirmed, answering "does 0 to an unlit position affect the lit one?"**:
+with Status2 (CC100) lit, sending CC99=0 (a *different*, already-off CC) turned Status2 off too -- so
+this is not "4 independent bits, only clearable by their own CC" but **one hardware register**: writing
+127 to CC (98+N) sets the display to position N; writing 0 to **any** of the 4 CCs clears whichever
+position is showing, regardless of which CC lit it. 5 total states (off, or exactly one of 1-4 lit), not
+16 (4 independent bits) or even 5 independent on/off pairs.
+
+**Practical consequence for our own code**: `led_cc_messages`'s generic "resend every LED_CCS entry,
+127 or 0" loop -- correct for every other LED in this file -- would actively misbehave if applied to
+this group: whichever of the 4 CCs is iterated last with a 0 would clear an already-applied 127 from
+earlier in the same batch, regardless of intent. Given `STATUS_LED_CCS`'s array order (99,100,101,102),
+naively including them in that loop would mean only "select Status4" ever sticks (nothing after it to
+clear it) -- everything else would silently clear itself. Fixed by giving this group its own dedicated
+function (`status_led_messages` in lib.rs, `statusLed` field in service.rs/index.html) that always
+clears first, then sets second, so the result is correct regardless of prior state -- and by presenting
+it in the simulator as a proper 5-state single-select control, not 4 checkboxes.
+
+**Loose end**: the 0x09-family lifecycle SysEx (`SurfaceStatus`, Thirty-fourth finding) was separately
+seen lighting this same position 4/Status4/CC102 slot. Two different mechanisms (a plain CC and a
+lifecycle SysEx) apparently feed the same one-of-four hardware indicator -- not reconciled, but no
+longer relevant to actually *controlling* the strip now that CC 99-102 does that directly and reliably.
+
+### Thirty-sixth finding: the message overlay and popup menu need an explicit dismiss action, not "send empty"
+
+Follow-up UI gap, prompted directly ("we probably also need a means to control the overlays in an
+on/off sense"): the simulator's `message` and popup-menu (`menuItems`) fields had no way to turn the
+overlay back *off* once shown -- clearing the text to empty does nothing, since `service.rs`'s `apply()`
+guards both writes with `!field.is_empty()` (empty means "don't touch," not "clear"), and per the
+Twenty-seventh/Thirty-first findings, neither overlay is clearable by its own empty/cancel bytes anyway
+-- only a genuine `page_template` switch dismisses either one. Added an explicit enable/disable checkbox
+next to each field in index.html; unchecking either one calls a shared `dismissOverlay()` that forces a
+real template switch (resending the title bar on the current layout, the same safe "carries a template
+switch" mechanism `layoutChanged` already used) and unchecks both boxes together, since dismissing one
+this way genuinely dismisses both -- there's no way to clear just one while leaving the other showing.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
