@@ -235,6 +235,7 @@ impl PadState {
 /// fields are exactly what that Background's Content schema actually holds,
 /// confirmed on hardware ("Tenth"/"Fifteenth"/"Sixteenth" findings) -- no
 /// page_template id or displayId number appears anywhere in this type.
+#[derive(Clone)]
 pub enum Background {
     /// 4x2 knob grid (the default page on connect).
     Mixer { param_names: [String; 8], param_values: [String; 8] },
@@ -269,6 +270,14 @@ pub enum Background {
     BrowserList { items: Vec<String> },
     /// Reset sentinel -- Content writes are a confirmed no-op here.
     Reset,
+    /// A deliberately EMPTY content area -- reuses template 5 (`Grid`, the
+    /// plainest layout tested: no fader/knob widgets at all) with nothing
+    /// written to it. Distinct from `Reset` (template 0), which falls back
+    /// to the device's own native default fader view rather than actually
+    /// looking blank. Chrome (title_bar/big_font/etc) still renders on top
+    /// regardless of Background -- pass empty chrome fields too via
+    /// `DeviceState` for the closest thing to an actually black screen.
+    Blank,
 }
 
 impl Background {
@@ -287,6 +296,103 @@ impl Background {
             Background::SceneButtons { .. } => 7,
             Background::BrowserList { .. } => 8,
             Background::Reset => 0,
+            Background::Blank => 5,
+        }
+    }
+}
+
+/// Tracks what's actually been sent, so `hide_popup`/`hide_message` can
+/// restore the right thing -- see the widget-model doc's "trigger-only, no
+/// clear primitive" class. There is no query/read-back on this device
+/// (confirmed repeatedly throughout this project), so this struct IS the
+/// only place "current state" exists at all; it's a plain in-memory model,
+/// not derived from the device.
+pub struct DeviceState {
+    last_background: Option<Background>,
+    last_title_bar: Vec<String>,
+    popup_visible: bool,
+    message_visible: bool,
+}
+
+impl Default for DeviceState {
+    fn default() -> Self {
+        DeviceState { last_background: None, last_title_bar: Vec::new(), popup_visible: false, message_visible: false }
+    }
+}
+
+impl DeviceState {
+    pub fn popup_visible(&self) -> bool {
+        self.popup_visible
+    }
+
+    pub fn message_visible(&self) -> bool {
+        self.message_visible
+    }
+
+    /// THE verb that changes which Background is active -- also the only
+    /// way to dismiss Message or an open popup, since both get marked
+    /// hidden here (a real switch clears them as a side effect, confirmed
+    /// -- Thirteenth/Thirty-first findings).
+    pub fn switch_background(&mut self, bg: Background, title_bar: Vec<String>) -> Vec<Vec<u8>> {
+        let msgs = switch_background_messages(&bg, &title_bar);
+        self.last_background = Some(bg);
+        self.last_title_bar = title_bar;
+        self.popup_visible = false;
+        self.message_visible = false;
+        msgs
+    }
+
+    /// Shows the popup -- draws on top of whatever Background is currently
+    /// active without changing `last_background` at all (it's hardcoded to
+    /// page_template=0 regardless, per `write_page_menu`'s doc comment).
+    pub fn show_popup(&mut self, items: &[String]) -> Vec<u8> {
+        self.popup_visible = true;
+        write_page_menu(items)
+    }
+
+    /// Highlight is separate from show/hide -- a plain CC, only meaningful
+    /// while the popup is actually showing.
+    pub fn set_popup_highlight(&self, row: u8) -> [u8; 3] {
+        cc_message(CC_MENU_HIGHLIGHT, row)
+    }
+
+    /// No-op (empty message vec) if already hidden or nothing to restore to
+    /// yet -- there's no "clear the popup and show nothing," restoring
+    /// `last_background` is the only dismiss mechanism that exists.
+    pub fn hide_popup(&mut self) -> Vec<Vec<u8>> {
+        if !self.popup_visible {
+            return Vec::new();
+        }
+        self.popup_visible = false;
+        self.message_visible = false; // a real switch clears this too
+        match self.last_background.clone() {
+            Some(bg) => switch_background_messages(&bg, &self.last_title_bar),
+            None => Vec::new(),
+        }
+    }
+
+    /// Shows the message overlay -- independent of whatever Background is
+    /// active (per direct request: "it may make sense to draw the message
+    /// over a non-blank background"). Does NOT touch `last_background`, so
+    /// `hide_message` restores whatever was really there, not a forced
+    /// blank screen. Confirmed NOT to suppress an already-open popup
+    /// (Thirty-first finding) -- the two can coexist, for better or worse.
+    pub fn show_message(&mut self, text: &str) -> Vec<u8> {
+        self.message_visible = true;
+        write_message(text)
+    }
+
+    /// Same no-op-if-already-hidden and "restore last_background" logic as
+    /// `hide_popup` -- there is no dedicated message-clear primitive either.
+    pub fn hide_message(&mut self) -> Vec<Vec<u8>> {
+        if !self.message_visible {
+            return Vec::new();
+        }
+        self.message_visible = false;
+        self.popup_visible = false;
+        match self.last_background.clone() {
+            Some(bg) => switch_background_messages(&bg, &self.last_title_bar),
+            None => Vec::new(),
         }
     }
 }
@@ -324,7 +430,7 @@ pub fn switch_background_messages(bg: &Background, title_bar: &[String]) -> Vec<
             msgs.push(write_page_labels(t, &[loop_left.clone(), loop_right.clone()]));
             msgs.push(write_names(t, labels));
         }
-        Background::Menu | Background::Reset => {} // no known/no real content schema -- title_bar alone still performs the switch
+        Background::Menu | Background::Reset | Background::Blank => {} // no content schema (Blank deliberately) -- title_bar alone still performs the switch
         Background::ListHighlighted { items, .. } => msgs.push(write_names(t, items)),
         Background::SceneButtons { labels } => msgs.push(write_names(t, labels)),
         Background::BrowserList { items } => msgs.push(write_names(t, items)),

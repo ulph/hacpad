@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "T5".into(), "T6".into(), "T7".into(), "T8".into(),
             ],
         },
-        "mixer" => Background::Mixer {
+        "mixer" | "overlaytest" => Background::Mixer {
             param_names: [
                 "CUT".into(), "RES".into(), "ATK".into(), "DEC".into(),
                 "SUS".into(), "REL".into(), "DRV".into(), "MIX".into(),
@@ -70,10 +70,45 @@ fn main() -> Result<(), Box<dyn Error>> {
             ],
         },
         other => {
-            eprintln!("unknown background {other:?}, expected pads|launcher|mixer");
+            eprintln!("unknown background {other:?}, expected pads|launcher|mixer|overlaytest");
             std::process::exit(1);
         }
     };
+
+    if which == "overlaytest" {
+        // Exercises DeviceState directly: background with real content, then
+        // popup, then message on TOP of both -- the exact "does this look
+        // messy" scenario flagged when designing show/hide semantics.
+        let mut state = DeviceState::default();
+        println!("1) switch_background(Mixer)...");
+        for msg in state.switch_background(bg, title_bar) {
+            default_conn.send(&msg)?;
+            sleep(Duration::from_millis(50));
+        }
+        sleep(Duration::from_secs(2));
+
+        println!("2) show_popup...");
+        let items = vec!["Item1".into(), "Item2".into(), "Item3".into()];
+        default_conn.send(&state.show_popup(&items))?;
+        sleep(Duration::from_millis(50));
+        default_conn.send(&state.set_popup_highlight(2))?;
+        sleep(Duration::from_secs(2));
+
+        println!("3) show_message (on top of background+popup)...");
+        default_conn.send(&state.show_message("OVERLAY TEST"))?;
+        sleep(Duration::from_secs(10));
+
+        println!("4) hide_message (should restore Mixer background; popup also cleared per the model)...");
+        for msg in state.hide_message() {
+            default_conn.send(&msg)?;
+            sleep(Duration::from_millis(50));
+        }
+
+        println!("Persisting -- holding connection open indefinitely. Ctrl-C to release.");
+        loop {
+            sleep(Duration::from_secs(3600));
+        }
+    }
 
     println!("Sending Background::{which} via switch_background_messages()...");
     for msg in switch_background_messages(&bg, &title_bar) {

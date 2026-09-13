@@ -17,11 +17,12 @@ layer** it belongs to, and **what kind of mutability** it has.
 
 | Layer | Members | Behavior |
 |---|---|---|
-| **Chrome** | `title_bar`(1), `big_font`(2), `current_value`(3), `menu_button`(4) | Template-independent. Survives a Background switch untouched (Fourteenth finding). Directly confirmed unaffected across **every** Background tested (Tenth finding's per-template probes: title bar rendered identically on templates 0,2,3,4,5,16,18,19,20,21,22 and every subsequent test). |
-| **Background** | `page_template`: see the full table below | Mutually exclusive — exactly one is "active." Switching to a different one clears Content, whether or not the switching write touches it (Fourteenth finding). |
-| **Content** | `ctrl_element_name`(6), `ctrl_element_value`(7), `pad_state`(0), `page_labels`(5) | Cleared by any real Background switch. Rendered differently by every Background (that's *what makes* a Background visually distinct) — see table. |
-| **Overlay** | popup menu (displayId 8, hardcoded `page_template=0`) | Draws on top of whatever Background+Chrome+Content is showing, without changing which Background is "official." Confirmed to overlay `drum_pads`(21) cleanly without disturbing it (Twenty-seventh finding). |
-| **Message** (exclusive mode) | `pageTemplate=1` one-shot write | Own separate SysEx pathway (Seventh finding), not a compose-path Background at all. Used dozens of times this whole project as the "force back to a clean state" trick, successfully, from every kind of prior state (compose templates, F-Keys' device-native page, mid-test garbage) — that repeated, always-successful practical use **is** the evidence that Message suppresses Background+Content the same way regardless of what preceded it, even though no one ever tabulated it as a formal test. Does **not** suppress the Overlay layer: the popup's highlighted bars stayed drawn on top of "hacpad" text (Thirty-first finding) — Message sits *below* Overlay in z-order. |
+| **Header** (top strip) | `title_bar`(1), `big_font`(2), `current_value`(3) | State-class, template-independent. Survives a Background switch untouched (Fourteenth finding), confirmed unaffected across **every** Background tested (Tenth finding's per-template probes). |
+| **Footer** (bottom strip) | `menu_button`(4) | Same State-class persistence as Header, kept as its own row since it's a physically separate strip (bottom of screen vs. top) that happens to share Header's mutability — "Chrome" as a single lumped category was conflating position with mutability class; split per direct request. |
+| **Background** | `page_template`: see the full table below | Mutually exclusive — exactly one is "active." Switching to a different one clears Body, whether or not the switching write touches it (Fourteenth finding). |
+| **Body** (the Background's own content area) | `ctrl_element_name`(6), `ctrl_element_value`(7), `pad_state`(0), `page_labels`(5) | Content-class: cleared by any real Background switch. Rendered differently by every Background (that's *what makes* a Background visually distinct) — see table. `page_labels` renders "near the first knob position" (Nineteenth finding), i.e. inside the Body area, not Header/Footer, despite being chrome-*adjacent* in earlier framing. |
+| **Overlay** | popup menu (displayId 8, hardcoded `page_template=0`) | Draws on top of whatever Background+Header+Footer+Body is showing, without changing which Background is "official." Confirmed to overlay `drum_pads`(21) cleanly without disturbing it (Twenty-seventh finding). |
+| **Message** (exclusive mode) | `pageTemplate=1` one-shot write | Own separate SysEx pathway (Seventh finding), not a compose-path Background at all. Used dozens of times this whole project as the "force back to a clean state" trick, successfully, from every kind of prior state — confirms Message suppresses Header/Footer/Background/Body regardless of what preceded it. **Its interaction with an open Overlay is unsettled, contradictory evidence**: the Thirty-first finding saw the popup's highlighted bars still drawn on top of "hacpad" text (Message *below* Overlay in z-order); a later, cleaner test (`verb_test overlaytest`: switch_background → show_popup → show_message, in that exact order) showed Message rendering **completely alone**, no popup bleed-through at all. Not reconciled — may be order/prior-state-dependent (the earlier test's popup may have been "stale" from much earlier in that session rather than freshly shown right before Message, unlike the later test). Treat as open, not settled either direction. |
 
 **Background table** (all confirmed on hardware, Tenth/Fifteenth/Sixteenth findings):
 
@@ -79,7 +80,34 @@ Not yet exercised: `FaderSplit`, `FaderRow`, `List`, `Grid`, `PadView3Row`, `Men
 `ListHighlighted`, `SceneButtons`, `BrowserList`, `Reset`. High confidence these also work
 given the schema was derived directly from each one's own confirmed hardware probe
 (Tenth/Fifteenth/Sixteenth findings) and the lowering logic is uniform, but not
-independently verified yet.
+independently verified yet. Also added `Background::Blank` (reuses template 5/`Grid`
+with nothing written to it) as a genuine "nothing showing" Background, distinct from
+`Reset`(0) which falls back to the device's own native default view instead of looking
+blank -- not yet independently tested either.
+
+### Show/hide semantics for Trigger-only members (`DeviceState`)
+
+Per the mutability-class table, Message and the popup have no clear primitive of their
+own -- the only way to make either stop showing is a real Background switch. Added
+`DeviceState` (lib.rs), a small in-memory tracker (there is no read-back from the device at
+all, confirmed repeatedly -- this struct **is** "current state", not a mirror of it) that:
+- Remembers `last_background` + the title bar it was switched with, so `hide_popup()`/
+  `hide_message()` can restore *whatever was actually there*, not a hardcoded fallback --
+  directly addressing "we may want to draw the message over a non-blank background" (i.e.
+  Message and the currently-active Background are controlled independently; `Blank` is
+  just one Background a caller can choose, never forced by the message/popup verbs).
+- Marks both `popup_visible` and `message_visible` false whenever a real
+  `switch_background` happens (confirmed: a real switch clears both as a side effect), and
+  `hide_popup()`/`hide_message()` are each other's twin for this reason -- both restore
+  `last_background`, both mark both flags false, since there's no way to clear just one.
+- No-ops (empty message vec) when asked to hide something already hidden.
+
+**Verified directly on hardware** (`verb_test overlaytest`): `switch_background(Mixer)` →
+`show_popup` → `show_message` → `hide_message`. Message rendered cleanly (see the z-order
+note in the layer table above -- this specific run showed NO popup bleed-through, contrary
+to the Thirty-first finding). `hide_message()` correctly restored the full Mixer view
+(all 8 knobs, names and values both correct) with the popup also gone, matching the model
+exactly.
 
 ## Interaction matrix — Background × Overlay/Message
 
