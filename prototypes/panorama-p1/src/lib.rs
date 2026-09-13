@@ -285,6 +285,10 @@ pub const LED_CCS: &[u8] = &[
     29, // arranger automation write -- CONFIRMED on hardware: toggling this produces no visible effect
     99, // CONFIRMED on hardware: NOT the F-Keys button's own backlight -- lights the first of a row of
         // 4 small status LEDs above the screen. The other 3 in that strip have no known CC yet.
+    30, // Mute -- cursorTrack.getMute(), CONFIRMED from source: SAME CC drives both the input toggle
+        // (`case CC.30: cursorTrack.getMute().toggle()`) and this LED feedback -- standard pattern,
+        // found via a fuller re-grep of every literal sendChannelController call site.
+    31, // Solo -- cursorTrack.getSolo(), same pattern as Mute (CC 30) above.
 ];
 
 /// One CC message per entry in `LED_CCS`, each set to on (127) if that CC

@@ -1619,6 +1619,14 @@ real hardware:
 - **CC 29** ("arranger automation write", per source's `sendChannelController` call site): toggling on
   produces **no visible effect** on this hardware -- either this unit has no backlit automation-write
   button, or 29 isn't the right CC for it. Negative result, not yet explained.
+  **Follow-up, resolved which half of that**: re-read the exact source call site directly --
+  `transport.addIsWritingArrangerAutomationObserver(function(a){sendChannelController(0,CC.Z8103C1CCB3F85A29E,a?127:0)})`,
+  and `Z8103C1CCB3F85A29E` is unambiguously `CC{...:29}` in the enum. **The CC number is confirmed
+  correct** -- it's driven by real Bitwig transport state, not a guess. So the negative result means this
+  specific physical unit most likely has no dedicated LED for this function at all (or it's combined
+  into another button's indicator, e.g. a Shift-gated function sharing Record's LED, per the
+  Shift-flag-gates-alternate-function pattern already documented elsewhere in this file) -- not that we
+  had the wrong CC.
 - **CC 99**: NOT the F-Keys button's own backlight as guessed in `led_test.rs`'s comment ("likely a
   static connected/online indicator") -- confirmed instead to light the **first of a row of 4 small
   status LEDs positioned above the screen**. Matches the "sent unconditionally at init" behavior (a
@@ -1698,6 +1706,77 @@ shared JSON *state*, the *simulator*'s deterministic rendering of that state (re
 since no headless browser was available to actually screenshot the page), and the *real device* via the
 webcam -- catching two mockup inaccuracies that would otherwise have silently drifted from hardware
 truth.
+
+### Thirty-third finding: a fuller re-grep of every literal `sendChannelController` call site resolves the remaining input CCs, and finds two new LEDs (Mute/Solo)
+
+Prompted directly: "the status leds above the screen -- only 'Status1' is controllable... failure to
+measure?" Re-did the CC-identification work with a wider net than the earlier pass: extracted the FULL
+`CC={...}` enum (75 entries) from `PANORAMA_P1.control.js`, then found every literal
+`Z81134B25E3E8D3DA8(0,CC.<ident>` (the `sendChannelController` wrapper) call site rather than grepping
+for specific known identifiers -- this is what the earlier pass missed (its case-body grep didn't span
+the full minified line for several CCs).
+
+**Two new, previously-untried LED CCs found, both a clean input+output pair (same mechanism as every
+other LED in this file)**:
+- **CC 30 = Mute**: `case CC.30: cursorTrack.getMute().toggle()` (input) and
+  `cursorTrack.getMute().addValueObserver(function(a){sendChannelController(0,CC.30,a?127:0)})` (output
+  LED) -- same CC drives both, standard pattern.
+- **CC 31 = Solo**: identical pattern, `cursorTrack.getSolo()`.
+- Live-tested via the simulator's LED panel (isolated, only these two lit): **no visible change in the
+  currently-framed camera view** (screen + top-4-button strip + Track-/Track+/Patch-/Patch+/View row).
+  The fader/select-button area, where a Mute/Solo indicator would more plausibly live, is physically out
+  of the webcam's current framing (camera position, not zoom -- `zoom_absolute`/`pan_absolute`/
+  `tilt_absolute` are all still 0) and hasn't been re-checked with the camera repositioned. **Not yet
+  visually confirmed either way** -- the CC identities themselves are certain (straight from source),
+  only their physical LED location/visibility is still open.
+- **CC 25**: also a literal `sendChannelController` call site (in a conditional tied to `menuButtonLabel`
+  text: `"Browser"`/`"<"`/`">"`/`"OK"` vs `"Sends"`/`"User"`/`"Devices"`), not yet characterized or tested
+  live -- a genuine new candidate, not confidently identified.
+- **CC 15 + CC 47** are NOT simple on/off LEDs -- `cursorTrack.getVolume().addValueObserver(1024,
+  function(a){var b=a&7;a>>=3; sendChannelController(0,CC.15,b); sendChannelController(0,CC.47,a)})`:
+  a 3-bit/remaining-bits split of the (0-1023-scaled) volume value across two CCs, almost certainly
+  driving a segmented level-meter LED bargraph for the focused track, not a single indicator. Different
+  mechanism from every other LED_CCS entry -- not added to that list, needs its own dedicated handling
+  if pursued.
+- **CC 14** confirms our own already-known `fader_master` input mapping from the output side too (tied
+  to `masterFaderValue`/`trackFaderValue` feedback) -- no new information, just cross-confirms.
+
+**All remaining previously-unresolved input CCs, resolved from source in the same pass** (main.rs
+updated accordingly):
+- **CC 88** = Undo/Redo (Shift-gated: shift=`application.redo()`, plain=`application.undo()`) --
+  corrects the earlier positional guess that had this at CC 102.
+- **CC 90** = Overdub (plain) / automation-write-toggle (Shift) -- `transport.toggleOverdub()` vs
+  `transport.toggleWriteArrangerAutomation()`.
+- **CC 93 & CC 94** literally share one case body (`case CC.93:case CC.94:PATCH_PRESSED=0<e`) -- a
+  fallthrough setting one shared gate flag, not two independently-dispatched buttons at this switch.
+  Labeled `patch_minus`/`patch_plus` from the physical button row (confirmed via a webcam photo showing
+  the printed labels: Shift/Track-/Track+/Patch-/Patch+/View) -- not fully reconciled with an EARLIER
+  finding that attributed CC 94 to `application.zoomIn()`/`arrowKeyDown()`/preset-scroll (that logic
+  likely lives elsewhere, reading the shared flag alongside encoder direction) -- treat the exact
+  minus-vs-plus split as tentative.
+- **CC 95** = View (`onView()`, or in some states sends the 0x0B "Launcher" SysEx family documented
+  elsewhere in this file).
+- **CC 97** = **CORRECTED** -- source is `TOGGLE_MUTE_PRESSED=0<e`, a mode-gate flag, NOT the jog wheel's
+  push/click as previously guessed (that guess is now removed from main.rs). Distinct from CC 30 (which
+  directly toggles+lights cursorTrack mute) -- CC 97 is plausibly a pad/drum-mode mute-select button,
+  not yet confirmed live.
+- **CC 98** = `TOGGLE_VIEW_PRESSED`/`onToggleView()`.
+- **CC 100/101/102** = three distinct browser/patch-menu "cancel"-shaped handlers (`gBrowserOpen=false`
+  plus varying `setActiveDisplayPage`/`SurfaceStatus` side effects) -- not individually distinguished as
+  specific physical buttons yet, kept as generic source-quoted labels rather than over-claiming names.
+- **CC 104** = `SurfaceStatus`/`SURFACE.connected`-state related -- plausibly not a normal user button.
+- **CC 105** = `transport.toggleWriteArrangerAutomation()`, **unconditional** (unlike CC 90's Shift-gated
+  version) -- likely the actual physical button whose LED is CC 29 (still no visible LED effect
+  confirmed on this hardware, per the Thirtieth finding).
+
+**Answer to the original question**: the earlier "only Status1 works" result was a genuine gap in how
+thoroughly the source was searched, not a hardware limitation being mistaken for one -- a wider, more
+systematic re-grep (every literal call site, not just a curated candidate list) turned up 2 solid new
+LED CCs (Mute/Solo) plus a 2-CC segmented-value pair (15/47) immediately. The other 3 LEDs in the actual
+4-LED status strip above the screen specifically are still unfound, though -- none of the newly-found
+CCs (25, 30, 31) were confirmed to land there. Worth another pass looking specifically for call sites
+using a computed/indexed CC argument (e.g. `CC[base+i]`) rather than a literal `CC.<ident>`, which this
+grep pattern would not have caught.
 
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 

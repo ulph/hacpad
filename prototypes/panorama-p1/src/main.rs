@@ -73,23 +73,43 @@ fn cc_name(cc: u8) -> String {
         85 => "record".to_string(),  // transport.record()
         86 => "loop_in".to_string(), // transport.getInPosition().set(...)
         87 => "loop_out".to_string(), // transport.getOutPosition().set(...)
-        // 88, 90: not resolved from source in this pass (case bodies not matched by a simple
-        // grep -- may span more of the minified line than searched). 91-95 confirmed to exist as a
-        // 5-button nav cluster, tied to zoom/arrow-key/preset-scroll actions (94 confirmed:
-        // application.zoomIn() / arrowKeyDown() / preset-scroll depending on Shift and browser
-        // state) -- exact per-button identity (which is "up" vs "zoom" etc) not individually
-        // distinguished yet. 89 confirmed: transport.toggleClick()/toggleMetronomeTicks() --
-        // labeled "click" below, correcting the earlier photo-based "patch_plus" guess.
-        89 => "click".to_string(),
-        91..=95 => format!("nav_zoom_{}", cc - 91 + 1),
+        89 => "click".to_string(), // transport.toggleClick()/toggleMetronomeTicks()
+        // 88, 90, 93-95, 97-98, 100-102, 104-105: resolved from a fuller re-grep of PANORAMA_P1.control.js
+        // ("Thirty-third finding" in the protocol notes) -- the earlier pass's case-body grep missed these
+        // because they span more of the minified line than that grep searched.
+        88 => "undo_redo".to_string(), // Shift-gated: shift=application.redo(), plain=application.undo()
+        90 => "overdub".to_string(), // Shift-gated: shift=transport.toggleWriteArrangerAutomation() ("Automation:"), plain=transport.toggleOverdub() ("Overdub:")
+        // 93/94: both literally share ONE case body (`case CC.93: case CC.94: PATCH_PRESSED=0<e`) --
+        // a fallthrough that just sets a shared "patch browsing" gate flag, not two separately-handled
+        // buttons at this switch. Labeled patch_minus/patch_plus from the physical button row
+        // (Shift/Track-/Track+/Patch-/Patch+/View, confirmed live via a webcam photo showing the
+        // printed labels) -- matches an EARLIER, separate finding that attributed CC 94 to
+        // application.zoomIn()/arrowKeyDown()/preset-scroll depending on Shift/browser state (that
+        // logic lives elsewhere, likely reading PATCH_PRESSED alongside encoder direction, not at this
+        // exact dispatch site) -- the two findings aren't fully reconciled yet, treat the exact
+        // patch_minus-vs-patch_plus split as tentative.
+        93 => "patch_minus".to_string(),
+        94 => "patch_plus".to_string(),
+        95 => "view".to_string(), // onView(), or (unshifted, some states) sends the 0x0B "Launcher" SysEx family documented elsewhere in this file
+        91 | 92 => format!("nav_{}", cc - 91 + 1), // still not individually resolved from source
         99 => "f_keys".to_string(), // confirmed live: opens a distinct, DEVICE-NATIVE "F-KEYS" page (F1-F11/P5/P11 grid) -- rendered by the P1 itself, not by anything we (or a DAW driver) send over SysEx; source's handler just does setActiveDisplayPage/gBrowserOpen bookkeeping on the Bitwig-driver side, which isn't even running in our setup. Confirmed momentary (releases when the button is released). The P1 also exposes a genuine USB HID keyboard interface (class 3, standard boot-keyboard report descriptor, separate from MIDI) -- plausibly what "F-Keys" actually drives, but no HID report was captured yet to confirm the link empirically.
-        100 => "rewind_bar".to_string(), // positional guess only, not source- or photo-confirmed with confidence
-        101 => "forward_bar".to_string(), // positional guess only
-        102 => "undo".to_string(),        // positional guess only
+        // 100-102, 104: all resolved as browser/patch-menu "cancel"-shaped handlers (gBrowserOpen=false,
+        // setActiveDisplayPage/SurfaceStatus changes) but not individually distinguished as specific
+        // physical buttons yet -- kept generic and source-quoted rather than over-claiming a name.
+        100 => "browser_cancel_1".to_string(), // gBrowserOpen=false; shift: application.createInstrumentTrack(-1)
+        101 => "browser_cancel_2".to_string(), // gBrowserOpen=false; setActiveDisplayPage + nek_set_nektarine_instance_active(0)
+        102 => "browser_cancel_3".to_string(), // gBrowserOpen=false; softTakeoverReset(); setActiveDisplayPage(internalPage)
+        104 => "surface_status".to_string(), // SurfaceStatus/SURFACE.connected-state related -- plausibly not a normal user button, not yet confirmed live
+        105 => "automation_write".to_string(), // transport.toggleWriteArrangerAutomation(), unconditional (unlike CC 90's Shift-gated version) -- likely the button whose LED is CC 29
         // Confirmed from PANORAMA_P1.control.js's onMidi CC dispatch (Z811481AF53E7994F1),
         // then verified live via the physical device (Twenty-eighth finding):
         96 => "shift".to_string(), // momentary; source sets a boolean gate flag on value>0/0
-        97 => "jog_click".to_string(), // fires right alongside the jog wheel's own cc (111) -- likely its push/click function
+        // 97: CORRECTED -- source is `case CC.97: TOGGLE_MUTE_PRESSED=0<e` (a mode-gate flag), NOT the
+        // jog wheel's push/click as previously guessed. Distinct from CC 30, which directly toggles
+        // cursorTrack's mute AND drives its own LED -- CC 97 is plausibly a pad/drum-mode mute-select
+        // button instead, not yet confirmed live which physical control this is.
+        97 => "toggle_mute_pressed".to_string(),
+        98 => "toggle_view_pressed".to_string(), // source: TOGGLE_VIEW_PRESSED=0<e; onToggleView() on press
         103 => "mode".to_string(), // source: setActiveDisplayPage(internalPage) on press
         106 => "menu_button_0".to_string(), // 5th of the "menu buttons" LED range (106-110); not otherwise distinguished from 107-110
         107 => "screen_button_1".to_string(),

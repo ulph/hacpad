@@ -83,6 +83,31 @@ hash-style identifiers. **317 distinct such identifiers** counted (`grep -oE '\b
 | `Z8103EE82A3F8314DF` | **CC 96 — Shift** (see `Z8114DFD213E74EEB9` above) | write-site for the Shift flag |
 | `Z8106041EB3F613A4B` | **CC 103 — Mode** button: `case CC.Z8106041EB3F613A4B: 0<e?(setActiveDisplayPage(internalPage),...):setActiveDisplayPage(Z810D7CD223EEA2020)` | plausibly the physical Mode button tied to the "Internal mode" bypass from the Fifth finding — not yet cross-checked live |
 | `Z810AD4A753F1454A0` | the currently-active page/view object (dispatch target for `onScreenButton(n)` and `.onRemoveMenu()`) | referenced constantly alongside `menuHandler`/`SurfaceStatus` state; candidate: `currentPage` |
+| `Z81059FA283F681574` | **CC 84 — Play** (`transport.addIsPlayingObserver`) | LED output; input dispatch not re-checked at this identifier, see main.rs's source-verified `cc_name` |
+| `Z81058F3A03F6991E6` | **CC 83 — Stop** | paired transport CC, confirmed alongside Play/Record/Loop in the same observer block |
+| `Z8105A03913F67196F` | **CC 85 — Record** (`transport.addIsRecordingObserver`) | LED output |
+| `Z81055FD5A3F6CD737` | **CC 80 — Loop/Cycle** (`transport.addIsLoopActiveObserver`) | LED output |
+| `Z81056BCC73F6B0D81` | **CC 81 — Rewind** | transport rewind |
+| `Z810577F413F6AEDAA` | **CC 82 — Forward** | transport fast-forward |
+| `Z8104C81913F751BFA` | **CC 99 — F-Keys / status LED** | sent unconditionally at init; confirmed live (Twenty-ninth finding) to be a device-native page trigger on input, and (Thirtieth finding) the first of a 4-LED status strip above the screen on output — the CC serves both roles |
+| `Z81053ADB53F6EBD21` | **CC 89 — Click** (`transport.toggleClick()`/`toggleMetronomeTicks()`) | corrected an earlier photo-based "patch_plus" guess |
+| `Z8105056B63F71FC00` | **CC 86 — Loop In** (`transport.getInPosition().set(...)`) | |
+| `Z8105119173F703633` | **CC 87 — Loop Out** (`transport.getOutPosition().set(...)`) | |
+| `Z8105E1A013F63C788` | **CC 94 — "patch_plus"** (tentative) | shares one case body with CC 93 (`PATCH_PRESSED=0<e`); also separately linked (unreconciled) to `application.zoomIn()`/preset-scroll logic elsewhere — see "Thirty-third finding" |
+| `Z8103C1CCB3F85A29E` | **CC 29 — arranger automation write LED** (`transport.addIsWritingArrangerAutomationObserver`) | CC confirmed correct from source; no visible LED effect on this hardware (Thirtieth finding) |
+| `Z81042E9F93F7FCE50` | **CC 30 — Mute** (`cursorTrack.getMute()`, both `.toggle()` on input and `.addValueObserver` LED output) | new, "Thirty-third finding" — not yet visually confirmed (camera framing) |
+| `Z81043C1DA3F7EE72C` | **CC 31 — Solo** (`cursorTrack.getSolo()`, same pattern as Mute) | new, "Thirty-third finding" |
+| `Z81040061B3F81C435` / `Z81041884E3F802B52` | **CC 15 + CC 47 — cursor-track volume, split across 2 CCs** (`var b=a&7;a>>=3; send(CC.15,b); send(CC.47,a)`) | a segmented level-meter pair, not a simple on/off LED — "Thirty-third finding" |
+| `Z81038AEAB3F89CC0D` | **CC 25** — literal `sendChannelController` site tied to `menuButtonLabel` text ("Browser"/"OK" vs "Sends"/"Devices") | new candidate, not yet characterized — "Thirty-third finding" |
+| `Z810523C6B3F6FEC7A` | **CC 88 — Undo/Redo** (Shift-gated: `application.redo()`/`application.undo()`) | corrects an earlier positional guess that had this at CC 102 |
+| `Z81054FE1C3F6D56FD` | **CC 90 — Overdub / automation-write (Shift)** (`transport.toggleOverdub()` / `transport.toggleWriteArrangerAutomation()`) | |
+| `Z8105DCB693F64B508` | **CC 93 — "patch_minus"** (tentative, see CC 94 above) | |
+| `Z8105F8BB93F6281E8` | **CC 95 — View** (`onView()`, or sends the 0x0B "Launcher" SysEx family in some states) | |
+| `Z8104AAC283F773BAC` | **CC 97 — `TOGGLE_MUTE_PRESSED` flag** | CORRECTS an earlier "jog_click" guess in main.rs; distinct from CC 30's direct mute toggle+LED |
+| `Z8104B264F3F7682F7` | **CC 98 — `TOGGLE_VIEW_PRESSED` / `onToggleView()`** | |
+| `Z8104DAF843F74473C` / `Z8104EC9663F735F63` / `Z8104F404F3F72FCF8` | **CC 100/101/102 — browser/patch-menu "cancel" variants** (`gBrowserOpen=false` + varying `setActiveDisplayPage`/`SurfaceStatus` effects) | not individually distinguished as specific physical buttons yet |
+| `Z8106175F93F60CC7D` | **CC 104 — `SurfaceStatus`/`SURFACE.connected` related** | plausibly not a normal user button |
+| `Z81044EA5E3F7D74A7` | **CC 105 — `transport.toggleWriteArrangerAutomation()`, unconditional** | likely the actual button whose LED is CC 29 |
 
 ## Open threads / next steps
 
