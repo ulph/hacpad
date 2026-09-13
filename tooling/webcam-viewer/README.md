@@ -77,6 +77,26 @@ and gets drawn as a green rectangle on the overlay. Add more fields to `STATE` a
 extend `draw()` in `index.html` as new debug needs come up -- no restart required for
 the client-side change, since it hot-reloads.
 
+## Camera tuning
+
+`camera_control_server.py` (port 8092) exposes every relevant v4l2 control as a live,
+bidirectional WebSocket -- the UI is under the feed on the main page. Confirmed this
+session: ambient light drifts enough in real time that a fixed "good" exposure value
+goes stale within minutes, and this LCD's own rendering can span more dynamic range
+(e.g. a widget with an intentional per-row brightness gradient) than one exposure
+setting can hold at all -- so there's no permanent right answer, only a reference
+point to dial back to. Last confirmed-working set (manually tuned, all 16 pad-grid
+slots legible):
+```json
+{"brightness":76,"contrast":2,"saturation":68,"sharpness":11,"backlight_compensation":0,
+ "white_balance_automatic":0,"white_balance_temperature":5966,"auto_exposure":3,
+ "exposure_time_absolute":60,"focus_automatic_continuous":1,"focus_absolute":17}
+```
+`capture.py` is the canonical (non-interactive, scriptable) capture path when a human
+isn't driving the sliders live -- re-derives exposure against the current moment
+rather than trusting a remembered value; use `capture_bracket()` for a wide-dynamic-
+range scene instead of searching for a single exposure that may not exist.
+
 ## Why this design
 
 Earlier attempts wrote JPEG stills to disk repeatedly and reopened the camera device
