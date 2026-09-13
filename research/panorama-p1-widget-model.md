@@ -160,10 +160,14 @@ and not others.
    confirmed to survive a switch untouched -- meaning an overlay drawn over them leaves stale
    content there until something explicitly rewrites them (Thirty-eighth finding: this is
    exactly how a popup's own Esc/Enter buttons got permanently stuck).
-2. **`set_tabs(tabs)` / `set_bigfont(text)` / `set_current_value(text)`** — the three
-   independently-settable Chrome fields (title_bar is set via `switch_background` itself).
-   Safe to call anytime regardless of Background; remembered so every subsequent
-   `switch_background`/overlay show-or-hide keeps re-asserting them.
+2. **`set_footer(tabs)` / `set_header_big_font(text)` / `set_header_current_value(text)`** —
+   the three independently-settable Chrome fields, named consistently after the Header/Footer
+   layer split (`title_bar` is set via `switch_background` itself, as part of `Header`).
+   `DeviceState` stores these as `header: Header { title_bar, big_font, current_value }` and
+   `footer: Footer { tabs }` structs, also the shape `DeviceSnapshot`/the WS wire protocol use
+   (`{"header": {...}, "footer": {...}}`, not flat fields). Safe to call anytime regardless of
+   Background; remembered so every subsequent `switch_background`/overlay show-or-hide keeps
+   re-asserting them.
 3. **`show_message(text)` / `hide_message()`** — real show/hide pair now (not one-shot-only):
    `hide_message()` bounces through a different `page_template` value first (same reasoning as
    `hide_popup`) then fully redraws whatever Background was last active, including Chrome.
@@ -276,9 +280,9 @@ code at all**. Partially closed this session:
   finding), but nothing keeps the two in sync after that.
 - ~~Residual blank button outlines after hiding a popup~~ — root-caused and fixed: the
   popup's own `Esc`/`Enter` buttons share the Footer slot (displayId 4, `menu_button`/tabs)
-  with the normal tab row, which nothing was resending. `DeviceState` now tracks/resends
-  `last_tabs` alongside every Background write. Confirmed clean on hardware (Thirty-eighth
-  finding, protocol notes).
+  with the normal tab row, which nothing was resending. `DeviceState` now tracks/resends its
+  `footer: Footer` field alongside every Background write. Confirmed clean on hardware
+  (Thirty-eighth finding, protocol notes).
 - Footer (`tabs`) now defaults to 5 blank placeholders and is fully caller-controllable
   (`set_tabs`/`SetTabs`), but nothing has driven real tab labels through this path yet —
   untested whether a Background switch's bounce-then-restore sequence looks visually

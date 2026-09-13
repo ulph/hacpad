@@ -403,6 +403,31 @@ struct BodyFields {
     page_labels: Option<Vec<String>>,
 }
 
+/// Header layer (displayId 1/2/3 -- `title_bar`/`big_font`/`current_value`).
+/// Confirmed STICKY: survives a Background switch untouched (Fourteenth
+/// finding) -- which is exactly why it must be explicitly force-resent by
+/// `full_redraw` rather than left alone; an overlay drawn over it leaves
+/// stale content there until something rewrites it.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Header {
+    pub title_bar: Vec<String>,
+    pub big_font: String,
+    pub current_value: String,
+}
+
+/// Footer layer (displayId 4 -- `menu_button`/tabs). Same stickiness as
+/// Header, kept as its own type since it's a physically separate strip
+/// (bottom of screen vs. top) -- see the widget-model doc's layer table.
+/// Confirmed live (webcam, Thirty-eighth finding) that a popup's own
+/// `Esc`/`Enter` buttons render through this SAME slot, which is exactly why
+/// leaving it unresent left them permanently ghosted after dismissing one.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Footer {
+    pub tabs: Vec<String>,
+}
+
 /// Tracks what's actually been sent, so `hide_popup`/`hide_message` can
 /// restore the right thing -- see the widget-model doc's "trigger-only, no
 /// clear primitive" class. There is no query/read-back on this device
@@ -411,7 +436,7 @@ struct BodyFields {
 /// not derived from the device.
 pub struct DeviceState {
     last_background: Option<Background>,
-    last_title_bar: Vec<String>,
+    header: Header,
     popup_visible: bool,
     message_visible: bool,
     // Last content handed to show_popup/show_message -- a SOFTWARE mirror
@@ -421,51 +446,26 @@ pub struct DeviceState {
     last_popup_items: Vec<String>,
     last_popup_highlight: Option<u8>,
     last_message_text: Option<String>,
-    // Footer (displayId 4, menu_button/tabs) -- confirmed template-
-    // independent (survives a Background switch untouched, "Follow-up:
-    // displayId 4 works with ANY template"), which is exactly why NOTHING
-    // was ever resending it: `switch_background_messages` never touched it
-    // at all. Confirmed live (webcam) this left it holding whatever the
-    // popup's own native Esc/Enter buttons last drew there (or, before
-    // that, boot-time demo content) indefinitely -- sending CC 109 (the
-    // input CC an Esc-button PRESS reports) as host->device output revealed
-    // stale "Tab4" text underneath, meaning the popup's own overlay
-    // chrome shares this same slot rather than being independent of it.
-    // Tracked and resent alongside every Background write from now on
-    // (`switch_background`/`resend_body`), same "don't leave a field
-    // orphaned" reasoning as the Body blast.
-    last_tabs: Vec<String>,
-    // The other two Header fields (displayId 2/3, big_font/current_value --
-    // title_bar/displayId 1 was already always resent). Generalizing the
-    // Footer lesson directly ("if the popup spans over the whole screen,
-    // you need to set ALL displayIds and templates so that it redraws
-    // those parts of the screen") rather than waiting for a third bug
-    // report to notice these two are just as orphaned as tabs was.
-    // write_bigfont/write_current_value don't route through
-    // indexed_entries' empty-string filter (see their doc comments), so an
-    // empty default genuinely clears them -- no " " placeholder trick
-    // needed here, unlike `last_tabs`.
-    last_bigfont: String,
-    last_current_value: String,
+    footer: Footer,
 }
 
 impl Default for DeviceState {
     fn default() -> Self {
         DeviceState {
             last_background: None,
-            last_title_bar: Vec::new(),
+            header: Header::default(),
             popup_visible: false,
             message_visible: false,
             last_popup_items: Vec::new(),
             last_popup_highlight: None,
             last_message_text: None,
-            // 5 real (non-empty, so indexed_entries doesn't filter them
-            // out and skip the slot) but visually blank placeholders --
-            // we don't know what a caller wants shown here yet, and
-            // leaving stale text is worse than genuinely blank.
-            last_tabs: vec![" ".to_string(); 5],
-            last_bigfont: String::new(),
-            last_current_value: String::new(),
+            footer: Footer {
+                // 5 real (non-empty, so indexed_entries doesn't filter them
+                // out and skip the slot) but visually blank placeholders --
+                // we don't know what a caller wants shown here yet, and
+                // leaving stale text is worse than genuinely blank.
+                tabs: vec![" ".to_string(); 5],
+            },
         }
     }
 }
@@ -479,10 +479,8 @@ impl Default for DeviceState {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSnapshot {
     pub background: Option<Background>,
-    pub title_bar: Vec<String>,
-    pub tabs: Vec<String>,
-    pub bigfont: String,
-    pub current_value: String,
+    pub header: Header,
+    pub footer: Footer,
     pub popup_visible: bool,
     pub popup_items: Vec<String>,
     pub popup_highlight: Option<u8>,
@@ -502,10 +500,8 @@ impl DeviceState {
     pub fn snapshot(&self) -> DeviceSnapshot {
         DeviceSnapshot {
             background: self.last_background.clone(),
-            title_bar: self.last_title_bar.clone(),
-            tabs: self.last_tabs.clone(),
-            bigfont: self.last_bigfont.clone(),
-            current_value: self.last_current_value.clone(),
+            header: self.header.clone(),
+            footer: self.footer.clone(),
             popup_visible: self.popup_visible,
             popup_items: self.last_popup_items.clone(),
             popup_highlight: self.last_popup_highlight,
@@ -521,7 +517,7 @@ impl DeviceState {
     pub fn switch_background(&mut self, bg: Background, title_bar: Vec<String>) -> Vec<Vec<u8>> {
         let msgs = self.full_redraw(&bg, &title_bar);
         self.last_background = Some(bg);
-        self.last_title_bar = title_bar;
+        self.header.title_bar = title_bar;
         self.popup_visible = false;
         self.message_visible = false;
         msgs
@@ -542,9 +538,9 @@ impl DeviceState {
     fn full_redraw(&self, bg: &Background, title_bar: &[String]) -> Vec<Vec<u8>> {
         let t = bg.page_template();
         let mut msgs = switch_background_messages(bg, title_bar);
-        msgs.push(write_tabs(t, &self.last_tabs));
-        msgs.push(write_bigfont(t, &self.last_bigfont));
-        msgs.push(write_current_value(t, &self.last_current_value));
+        msgs.push(write_tabs(t, &self.footer.tabs));
+        msgs.push(write_bigfont(t, &self.header.big_font));
+        msgs.push(write_current_value(t, &self.header.current_value));
         msgs
     }
 
@@ -554,28 +550,29 @@ impl DeviceState {
     /// matter beyond being *a* valid one) -- also remembered so every
     /// subsequent `switch_background`/`resend_body` keeps re-asserting it,
     /// instead of leaving it to whatever last wrote that slot.
-    pub fn set_tabs(&mut self, tabs: Vec<String>) -> Vec<u8> {
+    pub fn set_footer(&mut self, tabs: Vec<String>) -> Vec<u8> {
         let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
         let msg = write_tabs(t, &tabs);
-        self.last_tabs = tabs;
+        self.footer.tabs = tabs;
         msg
     }
 
-    /// Same idea as `set_tabs`, for the other two Header fields (displayId
+    /// Same idea as `set_footer`, for the other two Header fields (displayId
     /// 2/3) -- generalizing the same "an overlay can cover any part of the
-    /// screen, so recovery must redraw every displayId" lesson tabs taught,
-    /// instead of waiting for a bug report against these two specifically.
-    pub fn set_bigfont(&mut self, text: String) -> Vec<u8> {
+    /// screen, so recovery must redraw every displayId" lesson Footer
+    /// taught, instead of waiting for a bug report against these two
+    /// specifically.
+    pub fn set_header_big_font(&mut self, text: String) -> Vec<u8> {
         let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
         let msg = write_bigfont(t, &text);
-        self.last_bigfont = text;
+        self.header.big_font = text;
         msg
     }
 
-    pub fn set_current_value(&mut self, text: String) -> Vec<u8> {
+    pub fn set_header_current_value(&mut self, text: String) -> Vec<u8> {
         let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
         let msg = write_current_value(t, &text);
-        self.last_current_value = text;
+        self.header.current_value = text;
         msg
     }
 
@@ -592,7 +589,7 @@ impl DeviceState {
     /// (none exists) -- purely "trust the caller, they just wrote this".
     pub fn seed_background(&mut self, bg: Background, title_bar: Vec<String>) {
         self.last_background = Some(bg);
-        self.last_title_bar = title_bar;
+        self.header.title_bar = title_bar;
         self.popup_visible = false;
         self.message_visible = false;
     }
@@ -641,8 +638,8 @@ impl DeviceState {
                 } else {
                     Background::Blank
                 };
-                let mut msgs = self.full_redraw(&bounce, &self.last_title_bar);
-                msgs.extend(self.full_redraw(bg, &self.last_title_bar));
+                let mut msgs = self.full_redraw(&bounce, &self.header.title_bar);
+                msgs.extend(self.full_redraw(bg, &self.header.title_bar));
                 msgs
             }
             None => Vec::new(),

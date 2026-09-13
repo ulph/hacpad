@@ -1048,25 +1048,28 @@ el('sem-message-show-btn').addEventListener('click', () => {
 el('sem-message-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hideMessage' }));
 
 el('sem-tabs-btn').addEventListener('click', () => {
-  sendSemantic({ cmd: 'setTabs', tabs: csv(el('in-tabs').value) });
+  sendSemantic({ cmd: 'setFooter', tabs: csv(el('in-tabs').value) });
 });
 el('sem-bigfont-btn').addEventListener('click', () => {
-  sendSemantic({ cmd: 'setBigfont', text: el('in-bigfont').value });
+  sendSemantic({ cmd: 'setHeaderBigFont', text: el('in-bigfont').value });
 });
 el('sem-current-value-btn').addEventListener('click', () => {
-  sendSemantic({ cmd: 'setCurrentValue', text: el('in-current-value').value });
+  sendSemantic({ cmd: 'setHeaderCurrentValue', text: el('in-current-value').value });
 });
 
 // Rendered from `{"semanticState": ...}` messages -- see DeviceState::snapshot()
 // in lib.rs. Software mirror only (no device read-back exists), same honesty
-// as the Rust side.
+// as the Rust side. `header`/`footer` are nested objects now (Header/Footer
+// structs in lib.rs), not flat titleBar/tabs/bigfont/currentValue fields.
 function applySemanticState(state) {
   if (!state) return;
   const bgType = state.background ? state.background.type : '(none switched yet)';
+  const header = state.header || {};
+  const footer = state.footer || {};
   const popup = state.popupVisible ? `visible (${(state.popupItems || []).length} items, highlight ${state.popupHighlight ?? '-'})` : 'hidden';
   const message = state.messageVisible ? `visible ("${state.messageText || ''}")` : 'hidden';
   el('semantic-status').textContent =
-    `background: ${bgType}  |  titleBar: ${(state.titleBar || []).join('/')}  |  bigfont: ${state.bigfont || ''}  |  currentValue: ${state.currentValue || ''}  |  tabs: ${(state.tabs || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
+    `background: ${bgType}  |  header.titleBar: ${(header.titleBar || []).join('/')}  |  header.bigFont: ${header.bigFont || ''}  |  header.currentValue: ${header.currentValue || ''}  |  footer.tabs: ${(footer.tabs || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
 }
 
 // Rendered from `{"inputSnapshot": {"fader_1": {"kind":"Fader",...}, ...}}` --
