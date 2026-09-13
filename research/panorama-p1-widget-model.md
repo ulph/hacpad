@@ -252,11 +252,15 @@ code at all**. Partially closed this session:
 
 **Still open / NOT done, to avoid overclaiming**:
 
-- **No live push to already-connected clients.** `handle_client`'s per-client loop only reads
-  (`socket.read()`, blocking) — there's no writer channel per client yet, for input OR for
-  screen-state edits from another tab. A fresh-connecting client sees the latest known input;
-  an already-open one does not get updated in real time. Same pre-existing limitation noted in
-  `handle_client`'s own doc comment, now also true for input.
+- **Still no TRUE server push to already-connected clients** — `handle_client`'s per-client
+  loop only reads (`socket.read()`, blocking) and this process's `tungstenite` is synchronous,
+  so a writer channel per client (needed for real push) risks two threads interleaving frame
+  bytes on the same socket, a protocol hazard not just an inconvenience. Worked around for
+  input specifically: a client can send `{"queryInput": true}` anytime and get a fresh
+  `inputSnapshot` back over the same request/reply loop every other message already uses;
+  index.html now polls this every 300ms, which feels live even though it technically isn't.
+  Screen-state edits from another tab still have no such workaround and remain
+  connect-time-only.
 - **The F-Keys button (CC 99) drives a device-native page, not our SysEx display at all** (see
   `f_keys`'s doc comment in lib.rs) — a reminder that not every physical control's effect is
   reachable or overridable through this MIDI-CC decode path.

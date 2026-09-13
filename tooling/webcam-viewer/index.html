@@ -408,14 +408,17 @@
     <hr style="border-color:#333; margin:0 0 12px;">
     <h3>Device &rarr; host: physical input</h3>
     <div id="note">
-      Read-only -- decoded straight from lib.rs's `decode_cc` (fader/encoder/button identity,
-      e.g. `fader_3`, `pan_encoder_5`, `play`), deliberately NOT mapped to whatever Background
-      is currently shown above (undecided whether that mapping ever makes sense -- this is
-      just "what the control IS on the hardware"). Snapshot only, not live: service.rs sends
-      this once per fresh connection, and there's no push to an already-open tab yet when the
-      physical control moves again -- reload this page to see a newer snapshot.
+      Read-only -- decoded straight from lib.rs's `InputState`/`decode_cc` (fader/encoder/
+      button identity, e.g. `fader_3`, `pan_encoder_5`, `play`), deliberately NOT mapped to
+      whatever Background is currently shown above (undecided whether that mapping ever makes
+      sense -- this is just "what the control IS on the hardware"). Live via polling (every
+      300ms this tab sends `{"queryInput":true}` and gets a fresh snapshot back) -- service.rs
+      has no true server push yet (see its own top doc comment), so this is a request/reply
+      loop dressed up as live, not an actual push, but it updates in well under a second either
+      way. Move a fader/knob or press a button on the real hardware to see it change here.
     </div>
-    <div id="input-snapshot" style="font-size:11px; color:#ccc; font-family:monospace; white-space:pre-wrap; max-height:160px; overflow-y:auto; border:1px solid #333; border-radius:4px; padding:6px; background:#0c0c0c;">(no input observed yet this connection)</div>
+    <div id="input-updated" style="font-size:10px; color:#666; margin-bottom:4px;">no input observed yet this connection</div>
+    <div id="input-snapshot" style="font-size:11px; color:#ccc; font-family:monospace; white-space:pre-wrap; max-height:160px; overflow-y:auto; border:1px solid #333; border-radius:4px; padding:6px; background:#0c0c0c;">(nothing yet)</div>
   </div>
 </div>
 
@@ -770,6 +773,15 @@ function connectService() {
 }
 connectService();
 
+// service.rs has no true server push (see its own top doc comment for
+// why -- the sync WebSocket library here can't safely split reads/writes
+// across threads on one socket) -- polling for a fresh inputSnapshot is
+// the practical stand-in, and it's cheap enough (one small JSON round trip)
+// to do a few times a second without concern.
+setInterval(() => {
+  if (wsReady) ws.send(JSON.stringify({ queryInput: true }));
+}, 300);
+
 // Differential push: the device keeps per-field state (see "Thirteenth
 // finding" in the protocol notes), so we track what we last actually sent
 // and only send a message for a field whose current form value differs from
@@ -1088,8 +1100,11 @@ function describeInputEvent(name, ev) {
 
 function applyInputSnapshot(snapshot) {
   const names = Object.keys(snapshot || {});
+  el('input-updated').textContent = names.length === 0
+    ? 'no input observed yet this connection'
+    : `last poll reply: ${new Date().toLocaleTimeString()} (${names.length} control${names.length === 1 ? '' : 's'} seen)`;
   if (names.length === 0) {
-    el('input-snapshot').textContent = '(no input observed yet this connection)';
+    el('input-snapshot').textContent = '(nothing yet -- move a fader/knob or press a button)';
     return;
   }
   el('input-snapshot').textContent = names.sort().map(n => describeInputEvent(n, snapshot[n])).join('\n');

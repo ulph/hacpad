@@ -36,17 +36,22 @@
 //! protocol notes: the device itself has no read-back, so there's nothing
 //! more authoritative to report.
 //!
-//! Also decodes the device's own CC input (via lib.rs's shared decode_cc,
+//! Also decodes the device's own CC input (via lib.rs's shared `InputState`,
 //! moved here from what used to be main.rs's own private copy) through a
 //! permanent input connection, and hands each newly-connecting client a
 //! snapshot of the latest known value per control as
 //! `{"inputSnapshot": {"fader_1": {...}, ...}}`, right after the normal
-//! screen-state sync. **Still not done**: pushing an input change LIVE to
-//! already-connected clients -- handle_client's per-client loop only reads
-//! (see its own doc comment); a real broadcast needs a writer channel per
-//! client, which doesn't exist yet for screen-state pushes either. So this
-//! closes "the service now knows about input at all", not "input is
-//! real-time over the wire yet".
+//! screen-state sync. A client can also ask for a fresh one anytime by
+//! sending `{"queryInput": true}` -- index.html polls this every few
+//! hundred ms so the input panel feels live. This is polling, not a real
+//! server push: a true push needs a writer channel per client so the input
+//! thread could send unprompted, but `handle_client`'s loop and this
+//! process's `tungstenite` version are synchronous -- splitting reads and
+//! writes across two threads on the SAME socket risks two independent
+//! writers interleaving frame bytes on the wire, a real protocol hazard,
+//! not just an inconvenience. Polling sidesteps that entirely by reusing
+//! the existing one-request-one-reply loop every other message already
+//! goes through.
 //!
 //! **Two ways to talk to this service, both accepted on the same socket**:
 //! the raw `ScreenUpdate` shape above (a direct, uncomposed field write --
@@ -488,6 +493,21 @@ fn handle_client(
                 continue;
             }
         };
+        // A third shape: `{"queryInput": true}` asks for a fresh
+        // inputSnapshot right now. This is polling, not a real server push
+        // (see this file's top doc comment on why -- splitting reads/writes
+        // across threads on one sync `tungstenite` socket risks interleaving
+        // frames from two writers) -- but it rides the same one-request-one-
+        // reply loop every other message already uses, so index.html can
+        // just poll this every few hundred ms and get a live-feeling input
+        // panel without any protocol risk.
+        if parsed.get("queryInput").is_some() {
+            let snapshot = serde_json::json!({ "inputSnapshot": *last_input.lock().unwrap() });
+            if let Ok(text) = serde_json::to_string(&snapshot) {
+                let _ = socket.send(Message::Text(text.into()));
+            }
+            continue;
+        }
         if let Some(semantic) = parsed.get("semantic") {
             let cmd: SemanticCommand = match serde_json::from_value(semantic.clone()) {
                 Ok(c) => c,
