@@ -1139,16 +1139,21 @@ function buildInputFields(controls) {
   });
 }
 
-// Rendered from `{"inputSnapshot": {"fader_1": {"kind":"Fader",...}, ...}}`,
-// polled every 300ms -- updates each field BUILT ABOVE in place rather than
-// rebuilding the list, so a field that's never been touched keeps showing
-// its placeholder instead of disappearing/reappearing.
+// Rendered from `{"inputSnapshot": {"fader_1": {"lastEvent": {"kind":
+// "Fader", ...}, "value": 85}, ...}}`, polled every 300ms -- updates each
+// field BUILT ABOVE in place rather than rebuilding the list, so a field
+// that's never been touched keeps showing its placeholder instead of
+// disappearing/reappearing. Each entry is an `InputControlState` (lib.rs),
+// NOT a bare InputEvent -- `value` is InputControlState's own mirrored/
+// accumulated 0..=127 number (right for Fader and Encoder alike); Button
+// needs `lastEvent.pressed` specifically since "value" alone can't
+// distinguish "pressed" from "just released to 0".
 function describeInputEvent(ev) {
-  if (!ev || !ev.kind) return { text: '?', pressed: false };
-  if (ev.kind === 'Fader') return { text: `${ev.value}`, pressed: false };
-  if (ev.kind === 'Encoder') return { text: `${ev.value ?? 0}`, pressed: false }; // accumulated position, see InputState
-  if (ev.kind === 'Button') return { text: ev.pressed ? 'ON' : 'off', pressed: !!ev.pressed };
-  return { text: `${ev.value ?? ''}`, pressed: false };
+  if (!ev || !ev.lastEvent) return { text: '?', pressed: false };
+  if (ev.lastEvent.kind === 'Button') {
+    return { text: ev.lastEvent.pressed ? 'ON' : 'off', pressed: !!ev.lastEvent.pressed };
+  }
+  return { text: `${ev.value}`, pressed: false };
 }
 
 function applyInputSnapshot(snapshot) {
