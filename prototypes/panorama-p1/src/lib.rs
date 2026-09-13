@@ -4,6 +4,7 @@
 //! persistent WebSocket-facing service). Every byte here is confirmed
 //! against real hardware -- see research/panorama-p1-protocol-notes.md.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::OnceLock;
 
@@ -1080,6 +1081,67 @@ pub fn decode_cc(cc: u8, value: u8) -> InputEvent {
     }
 }
 
+/// One semantic input control's tracked state -- the mapping from raw CC to
+/// semantic identity (`decode_cc`) is step one; this is step two, "remember
+/// what value each semantic input's last value is."
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputControlState {
+    /// The most recent decoded event for this control, verbatim.
+    pub last_event: Option<InputEvent>,
+    /// A single 0..=127 "current value" for this control, so a caller
+    /// doesn't have to match on `last_event`'s kind just to get a number:
+    /// Fader mirrors the raw absolute value; Button is 127 while pressed,
+    /// 0 while released (matching the raw CC convention); Encoder has no
+    /// absolute value of its own on the wire (relative 2's-complement
+    /// deltas) -- this is `InputState`'s OWN running accumulation of every
+    /// delta seen so far, clamped to 0..=127, a soft position estimate we
+    /// invent, not a hardware fact (there is no read-back for input either,
+    /// same honesty as `DeviceState`).
+    pub value: u8,
+}
+
+/// Device -> host state: the last known value/event for every semantic
+/// input control, keyed by its own hardware identity (`cc_name()` --
+/// `"fader_3"`, `"shift"`, `"pan_encoder_5"`, ...). Mirrors `DeviceState`'s
+/// role on the output side -- both are "there's no read-back, so this
+/// struct IS the current state" -- but deliberately kept independent of
+/// `DeviceState`/`Background`: "I do not know yet if it makes sense to map
+/// them to what's currently displayed on the screen... perhaps just
+/// semantically what they ARE on the actual hardware." No coupling exists,
+/// and none is assumed.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(transparent)]
+pub struct InputState {
+    controls: HashMap<String, InputControlState>,
+}
+
+impl InputState {
+    /// Decodes one raw CC message, updates that control's tracked state,
+    /// and returns the decoded event (same value `decode_cc` alone would
+    /// give -- this just also remembers it).
+    pub fn observe(&mut self, cc: u8, value: u8) -> InputEvent {
+        let event = decode_cc(cc, value);
+        let entry = self.controls.entry(event.name().to_string()).or_default();
+        match &event {
+            InputEvent::Fader { value, .. } => entry.value = *value,
+            InputEvent::Button { pressed, .. } => entry.value = if *pressed { 127 } else { 0 },
+            InputEvent::Encoder { delta, .. } => {
+                entry.value = (entry.value as i16 + *delta as i16).clamp(0, 127) as u8;
+            }
+            InputEvent::Unknown { value, .. } => entry.value = *value,
+        }
+        entry.last_event = Some(event.clone());
+        event
+    }
+
+    /// The tracked state for one control, if anything has been observed for
+    /// it yet this session.
+    pub fn get(&self, name: &str) -> Option<&InputControlState> {
+        self.controls.get(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1315,5 +1377,55 @@ mod tests {
         assert_eq!(json["kind"], "Fader");
         assert_eq!(json["name"], "fader_1");
         assert_eq!(json["value"], 100);
+    }
+
+    #[test]
+    fn input_state_tracks_fader_and_button_as_their_raw_value() {
+        let mut state = InputState::default();
+        state.observe(0, 42); // fader_1
+        assert_eq!(state.get("fader_1").unwrap().value, 42);
+
+        state.observe(96, 127); // shift, pressed
+        assert_eq!(state.get("shift").unwrap().value, 127);
+        state.observe(96, 0); // shift, released
+        assert_eq!(state.get("shift").unwrap().value, 0);
+
+        assert!(state.get("never_touched").is_none());
+    }
+
+    /// Encoders have no absolute value on the wire (relative 2's-complement
+    /// deltas) -- `InputState` invents one by accumulating every delta seen,
+    /// clamped to 0..=127 so it can't run away in either direction.
+    #[test]
+    fn input_state_accumulates_encoder_deltas_clamped_to_0_127() {
+        let mut state = InputState::default();
+        state.observe(48, 10); // pan_encoder_1, +10
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 10);
+        state.observe(48, 5); // +5 -> 15
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 15);
+        state.observe(48, 127); // -1 -> 14
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 14);
+
+        // Drive it below 0 and above 127 -- must clamp, not wrap or panic.
+        for _ in 0..20 {
+            state.observe(48, 127); // -1 each time
+        }
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 0, "clamped at the floor");
+        for _ in 0..200 {
+            state.observe(48, 1); // +1 each time
+        }
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 127, "clamped at the ceiling");
+    }
+
+    #[test]
+    fn input_state_serializes_transparently_as_a_flat_map() {
+        let mut state = InputState::default();
+        state.observe(0, 42);
+        let json = serde_json::to_value(&state).unwrap();
+        // #[serde(transparent)] -- no wrapping "controls" key, matches the
+        // existing inputSnapshot wire shape service.rs already sends.
+        assert_eq!(json["fader_1"]["value"], 42);
+        assert_eq!(json["fader_1"]["lastEvent"]["kind"], "Fader");
+        assert!(json.get("controls").is_none());
     }
 }

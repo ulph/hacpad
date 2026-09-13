@@ -69,7 +69,6 @@
 //! Usage:
 //!     cargo run --bin service            # listens on ws://0.0.0.0:8091
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::net::TcpListener;
 use std::thread;
@@ -385,20 +384,23 @@ impl Device {
 /// with every other field silently missing. Merging keeps all of them.
 type LastState = std::sync::Mutex<serde_json::Map<String, serde_json::Value>>;
 
-/// Latest decoded value per named control (`InputEvent`, see lib.rs), keyed
-/// by `cc_name()` -- e.g. `"fader_3"`, `"jog_wheel"`. Device -> host, the
-/// mirror image of `LastState` (host -> device). Updated only by the
-/// permanent input listener started in `main()`; read by `handle_client` to
-/// hand a fresh-connecting client a snapshot of "what does the hardware say
-/// right now", same spirit as `LastState`'s screen-state snapshot.
-type LastInput = std::sync::Mutex<HashMap<String, serde_json::Value>>;
+/// Device -> host: the last known value/event for every semantic input
+/// control (`InputState`, see lib.rs -- keyed by `cc_name()`, e.g.
+/// `"fader_3"`, `"jog_wheel"`, with encoders tracked as an accumulated
+/// 0..=127 position since they have no absolute value of their own on the
+/// wire). The mirror image of `LastState` (host -> device). Updated only by
+/// the permanent input listener started in `main()`; read by `handle_client`
+/// to hand a fresh-connecting client a snapshot of "what does the hardware
+/// say right now", same spirit as `LastState`'s screen-state snapshot.
+type LastInput = std::sync::Mutex<InputState>;
 
 /// Opens a permanent MIDI input connection and decodes every Control Change
-/// via lib.rs's `decode_cc`, storing the latest event per control name into
-/// `last_input`. Distinct from `Device::connect()`'s temporary ACK-
-/// verification input connection, which sends INIT_2 and drops itself
-/// before this runs -- ALSA/midir is fine with the two being sequential,
-/// not concurrent, since the temporary one is gone by the time this opens.
+/// via lib.rs's `InputState::observe` (which wraps `decode_cc` and also
+/// remembers the result), updating `last_input`. Distinct from
+/// `Device::connect()`'s temporary ACK-verification input connection, which
+/// sends INIT_2 and drops itself before this runs -- ALSA/midir is fine
+/// with the two being sequential, not concurrent, since the temporary one
+/// is gone by the time this opens.
 fn start_input_listener(
     last_input: std::sync::Arc<LastInput>,
 ) -> Result<MidiInputConnection<()>, Box<dyn Error>> {
@@ -409,14 +411,8 @@ fn start_input_listener(
         "hacpad-service-input-conn",
         move |_stamp, msg, _| {
             if msg.len() >= 3 && (0xB0..=0xBF).contains(&msg[0]) {
-                let event = decode_cc(msg[1], msg[2]);
+                let event = last_input.lock().unwrap().observe(msg[1], msg[2]);
                 println!("input: {event:?}");
-                // Real structured JSON now (InputEvent derives Serialize,
-                // tagged by "kind") -- a client can dispatch on it directly
-                // instead of getting a Debug-formatted string to parse.
-                if let Ok(value) = serde_json::to_value(&event) {
-                    last_input.lock().unwrap().insert(event.name().to_string(), value);
-                }
             }
         },
         (),
@@ -608,7 +604,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let device = std::sync::Arc::new(std::sync::Mutex::new(device));
     let last_state: std::sync::Arc<LastState> = std::sync::Arc::new(std::sync::Mutex::new(initial_map));
-    let last_input: std::sync::Arc<LastInput> = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let last_input: std::sync::Arc<LastInput> = std::sync::Arc::new(std::sync::Mutex::new(InputState::default()));
 
     // Kept alive for the rest of main()'s life (never read again after this
     // point) -- dropping it would silently stop delivering input.

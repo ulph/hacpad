@@ -237,6 +237,18 @@ code at all**. Partially closed this session:
   control by its own hardware identity (`fader_3`, `pan_encoder_5`, `play`) and nothing else —
   no coupling to whatever Background is currently shown. Not a gap to fill in; a considered
   choice, until/unless a screen-mapping is actually wanted.
+- **`InputState` — the input-side mirror of `DeviceState`**, per direct instruction ("the input
+  can also have a state. remember what value each semantical input's last value is" / "the
+  mapping from cc to semantical input is the first step"): `decode_cc` gives the semantic
+  identity (step one); `InputState::observe(cc, value)` wraps it and remembers a single
+  0..=127 "current value" per control name, keyed the same way (`fader_3`, `shift`, ...).
+  Fader/Button map straightforwardly (absolute value; 127/0 for pressed/released). Encoders
+  have no absolute value on the wire at all (relative 2's-complement deltas) — `InputState`
+  invents one by accumulating every delta it's seen, clamped to 0..=127, explicitly documented
+  as *our own running estimate*, not a hardware fact (there's no read-back for input, same as
+  `DeviceState`'s own honesty about output). `service.rs`'s permanent input listener now calls
+  `observe` directly instead of hand-rolling its own HashMap<String, Value>, so `InputState`
+  really is the one place this state lives, same as `DeviceState` on the output side.
 
 **Still open / NOT done, to avoid overclaiming**:
 
