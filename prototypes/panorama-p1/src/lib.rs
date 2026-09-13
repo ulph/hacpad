@@ -963,7 +963,20 @@ pub fn cc_name(cc: u8) -> String {
         // ("Thirty-third finding" in the protocol notes) -- the earlier pass's case-body grep missed these
         // because they span more of the minified line than that grep searched.
         88 => "undo_redo".to_string(), // Shift-gated: shift=application.redo(), plain=application.undo()
-        90 => "overdub".to_string(), // Shift-gated: shift=transport.toggleWriteArrangerAutomation() ("Automation:"), plain=transport.toggleOverdub() ("Overdub:")
+        // CORRECTED (Thirty-ninth finding): reported directly ("mode -> f-key, and so on"),
+        // then confirmed with a deliberate two-button live test + webcam photo taken the
+        // instant each CC arrived. Pressing the physical button silkscreened "Mode" (bottom-
+        // right of the F-Keys/F1-F11 grid, next to Record) produced CC 90, not the
+        // Bitwig-driver-sourced "overdub" this was previously guessed to be -- ruled out
+        // "the finger was actually on Record" by elimination, since Record is independently
+        // confirmed as CC 85 from source (Twenty-ninth finding) and did NOT fire here. The
+        // retracted `Shift-gated overdub/automation-write` behavior may still be real -- it's
+        // very plausibly what a Bitwig session specifically reassigns THIS SAME physical
+        // button to do once its driver is running (Bitwig has no use for a raw "Mode" toggle
+        // the way Nektar's own firmware does) -- but that's a DAW-side semantic layered on
+        // top of the hardware identity, not the hardware identity itself, which is what this
+        // name is for. Kept the old comment's source citation below for that reason.
+        90 => "mode".to_string(), // silkscreened label; Bitwig driver source: Shift-gated shift=transport.toggleWriteArrangerAutomation() ("Automation:"), plain=transport.toggleOverdub() ("Overdub:") -- a DAW-side reassignment of this button, not its hardware identity
         // 93/94: both literally share ONE case body (`case CC.93: case CC.94: PATCH_PRESSED=0<e`) --
         // a fallthrough that just sets a shared "patch browsing" gate flag, not two separately-handled
         // buttons at this switch. Labeled patch_minus/patch_plus from the physical button row
@@ -976,8 +989,31 @@ pub fn cc_name(cc: u8) -> String {
         93 => "patch_minus".to_string(),
         94 => "patch_plus".to_string(),
         95 => "view".to_string(), // onView(), or (unshifted, some states) sends the 0x0B "Launcher" SysEx family documented elsewhere
-        91 | 92 => format!("nav_{}", cc - 91 + 1), // still not individually resolved from source
-        99 => "f_keys".to_string(), // confirmed live: opens a distinct, DEVICE-NATIVE "F-KEYS" page (F1-F11/P5/P11 grid) -- rendered by the P1 itself, not by anything we (or a DAW driver) send over SysEx; source's handler just does setActiveDisplayPage/gBrowserOpen bookkeeping on the Bitwig-driver side, which isn't even running in our setup. Confirmed momentary (releases when the button is released). The P1 also exposes a genuine USB HID keyboard interface (class 3, standard boot-keyboard report descriptor, separate from MIDI) -- plausibly what "F-Keys" actually drives, but no HID report was captured yet to confirm the link empirically.
+        // RENAMED (Thirty-ninth finding, by elimination, not a fresh live+photo test):
+        // the official Nektar Panorama P1 manual's own labeled diagram confirms this row of 6
+        // physical buttons reads left-to-right as Shift/Track-/Track+/Patch-/Patch+/View.
+        // 93/94/95/96 are independently confirmed as patch_minus/patch_plus/view/shift, which
+        // leaves exactly these 2 CCs for the row's remaining 2 buttons -- Track-/Track+. Kept
+        // the CC-ordering convention already established for Patch- < Patch+ (93 < 94) to pick
+        // which of 91/92 is which; this specific pair hasn't been individually re-confirmed
+        // with its own live press + photo the way 90/99/103 just were.
+        91 => "track_minus".to_string(),
+        92 => "track_plus".to_string(),
+        // RETRACTED (Thirty-ninth finding): this was labeled "f_keys" on the theory that
+        // pressing it opened a device-native F-Keys page -- but a deliberate, photographed
+        // live test of the REAL physical F-Keys button (top-left of the transport grid)
+        // produced CC 103, never CC 99. The device-native-page-switch behavior itself was real
+        // and reproducible when this was first found -- only the attribution to "F-Keys"
+        // specifically is now known wrong.
+        //
+        // A real lead, found elsewhere in THIS SAME file rather than guessed fresh: CC 99 is
+        // also one of the four CONFIRMED status-LED-strip CCs (99-102, "Thirty-fifth finding",
+        // see STATUS_LED_CCS below) -- Status1, leftmost of the strip above the screen. Per the
+        // "one CC for input and LED" pattern already established for every other on/off button
+        // on this device (select_N, menu_button_0/screen_button_N, etc.), CC 99 as an INPUT is
+        // most likely whatever physical action lights that same Status1 LED position, not a
+        // transport-grid button at all -- not yet isolated which physical control that is.
+        99 => "status_led_1_or_unconfirmed".to_string(),
         // 100-102, 104: all resolved as browser/patch-menu "cancel"-shaped handlers (gBrowserOpen=false,
         // setActiveDisplayPage/SurfaceStatus changes) but not individually distinguished as specific
         // physical buttons yet -- kept generic and source-quoted rather than over-claiming a name.
@@ -995,7 +1031,13 @@ pub fn cc_name(cc: u8) -> String {
         // button instead, not yet confirmed live which physical control this is.
         97 => "toggle_mute_pressed".to_string(),
         98 => "toggle_view_pressed".to_string(), // source: TOGGLE_VIEW_PRESSED=0<e; onToggleView() on press
-        103 => "mode".to_string(), // source: setActiveDisplayPage(internalPage) on press
+        // CORRECTED (Thirty-ninth finding): confirmed live with a deliberate press + webcam
+        // photo taken the instant the CC arrived -- the finger was clearly on the physical
+        // "F-Keys" button (top-left of the transport grid, its own dedicated SHIFT per the
+        // official Nektar Panorama P1 manual), not whatever this device-side source-comment
+        // guess ("setActiveDisplayPage(internalPage)") had assumed. Swapped with CC 90 (see
+        // its own comment above) -- the two were reversed.
+        103 => "f_keys".to_string(),
         106 => "menu_button_0".to_string(), // 5th of the "menu buttons" LED range (106-110); not otherwise distinguished from 107-110
         107 => "screen_button_1".to_string(),
         108 => "screen_button_2".to_string(),
@@ -1392,6 +1434,23 @@ mod tests {
         // misattribution here specifically).
         match decode_cc(84, 127) {
             InputEvent::Button { name, .. } => assert_eq!(name, "play"),
+            other => panic!("expected Button, got {other:?}"),
+        }
+    }
+
+    /// Regression test for the Thirty-ninth finding: CC 90 and CC 103 were
+    /// reversed (labeled "overdub"/"mode" respectively, should be "mode"/
+    /// "f_keys") -- confirmed with a deliberate two-button live test, each
+    /// photographed the instant its CC arrived. Locks in the swap so it
+    /// can't silently regress back to the old (wrong) names.
+    #[test]
+    fn cc_90_and_103_are_mode_and_f_keys_not_reversed() {
+        match decode_cc(90, 127) {
+            InputEvent::Button { name, .. } => assert_eq!(name, "mode", "CC 90 is the physical Mode button"),
+            other => panic!("expected Button, got {other:?}"),
+        }
+        match decode_cc(103, 127) {
+            InputEvent::Button { name, .. } => assert_eq!(name, "f_keys", "CC 103 is the physical F-Keys button"),
             other => panic!("expected Button, got {other:?}"),
         }
     }

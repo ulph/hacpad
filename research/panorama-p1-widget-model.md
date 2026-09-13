@@ -264,13 +264,22 @@ code at all**. Partially closed this session:
 - **The F-Keys button (CC 99) drives a device-native page, not our SysEx display at all** (see
   `f_keys`'s doc comment in lib.rs) — a reminder that not every physical control's effect is
   reachable or overridable through this MIDI-CC decode path.
-- **Most of the CC map is reference-sourced, not individually pressed-and-confirmed on this
-  hardware.** Faders (0–7/14), pan encoders (48–55), and a handful of buttons (shift 96,
-  menu/jog 106–111) are directly confirmed live; the transport row, nav row, and most of the
-  88–105 range are sourced from re-grepping the Bitwig driver's JS (see the inline citations in
-  `cc_name` — "Thirty-third finding" etc.) and some are explicitly marked tentative or
-  unreconciled in the code comments themselves (patch_minus/patch_plus, CC 97). Treat `cc_name`
-  as "our best current attribution," not "hardware-verified for every branch."
+- **Much of the CC map is now cross-checked against the OFFICIAL Nektar manual's labeled panel
+  diagram** (Thirty-ninth finding), not only the third-party Bitwig driver's JS. Confirmed by
+  replaying the full historical input log against that diagram: faders (0–7/14), the Select
+  family (16–23), both encoder banks (48–55 pan, 64–71 param), the jog wheel (111), and the
+  whole transport row (80–89) — all sequential, no collisions, no `cc_N` fallthrough. **Two
+  entries were genuinely reversed and are now fixed** (CC 90 = `mode`, CC 103 = `f_keys`,
+  each confirmed by a deliberate live press photographed the instant its CC arrived), one was
+  retracted (CC 99, no longer claimed to be `f_keys`), and one pair renamed by elimination
+  (91/92 = `track_minus`/`track_plus`). Still NOT individually pressed-and-confirmed: CC
+  100–102/104–105, CC 97, the 91/92 ordering, and the patch_minus-vs-patch_plus split. Treat
+  those specific branches as "best current attribution," not hardware-verified.
+- **A physical silkscreen label and a DAW-side semantic can disagree, and `cc_name` deliberately
+  uses the silkscreen.** The clearest case: CC 90 is printed "Mode" on the unit, while the
+  Bitwig driver reassigns that same button to overdub/automation-write. Both are "true" at
+  different layers — this naming layer is the hardware identity ("what the control IS"), per
+  the standing decision to keep input semantics screen- and DAW-independent.
 - **Buttons are decoded as bare press/release (127/0), not debounced or edge-detected** — a
   held button re-sends 127 repeatedly on some controls (not characterized here); nothing
   distinguishes "pressed" from "still pressed."

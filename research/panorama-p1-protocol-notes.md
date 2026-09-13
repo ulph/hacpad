@@ -2003,6 +2003,61 @@ so the "always redraw everything visible without the overlay" rule still holds -
 that Body's OWN redraw is now driven by which fields a variant actually defines, not a blanket
 force-write of things the device already promises to clear itself.
 
+### Thirty-ninth finding: CC 90/103 were reversed (Mode vs F-Keys), and the official manual finally pins the physical layout
+
+Reported directly ("I think you mislabeled a lot of the buttons around the transport area.
+mode -> f-key, and so on"). Two things made this resolvable where earlier attempts had guessed:
+
+**1. Found Nektar's own user guide** (the official docs), which contains a labeled panel diagram
+and an explicit callout list. This pins the physical layout for the first time, rather than
+inferring it from a third-party Bitwig driver's source:
+- **A**: four MODE buttons above the display — `Mixer` / `Instrument` / `Transport` / `Internal`.
+  (Note: these are NOT the same thing as the button silkscreened "Mode" in the transport grid.)
+- **D**: five menu buttons under the display (labels follow the TFT's own bottom row).
+- **E**: six buttons — `Shift` / `Track-` / `Track+` / `Patch-` / `Patch+` / `View`.
+- **F**: the transport grid — **eleven** assignable buttons PLUS a dedicated SHIFT button
+  silkscreened `F-Keys`, laid out as two rows of six:
+  ```
+  F-Keys │ F1: |◄◄ │ F2: ►►| │ F3: Undo │ F4: Click │ F5: Mode
+  F6: ⟳  │ F7: ◄◄  │ F8: ►►  │ F9: ■    │ F10: ▶    │ F11: ⏺
+  ```
+  So "F-Keys" is a modifier giving all 11 an alternate assignment (22 total), and **"Mode" is
+  its own separate physical button at the F5 position** — the two are unrelated controls that
+  our naming had conflated.
+
+**2. Photographed each CC as it arrived.** Built a watcher that tails the service log and
+snaps a webcam frame the instant a CC is decoded, then ran a deliberate two-button test:
+press `F-Keys`, pause, press `Mode`. Results:
+- `F-Keys` → **CC 103** (photo shows the finger unambiguously on the grid's top-left button).
+- `Mode` → **CC 90**. Ruled out the visually-adjacent `Record` by elimination: Record is
+  independently confirmed as CC 85 from source (Twenty-ninth finding) and did not fire.
+- **CC 99 fired for neither**, retracting its previous "f_keys" label entirely.
+
+**Corrections applied** to `cc_name`:
+- `90`: `overdub` → **`mode`**. The retracted Bitwig-sourced behavior (Shift-gated
+  overdub/automation-write) is plausibly still real — as a DAW-side *reassignment* of this same
+  physical button once that driver runs. That's a semantic layer on top of the hardware
+  identity, not the identity itself, which is what this name is for. Source citation kept.
+- `103`: `mode` → **`f_keys`**.
+- `99`: `f_keys` → **`status_led_1_or_unconfirmed`**, an explicit retraction rather than a
+  silent overwrite. A real lead turned up in our own code rather than from fresh guessing:
+  CC 99 is also Status1 of the confirmed four-CC status-LED strip (99-102, Thirty-fifth
+  finding), so per this device's established "one CC for input and LED" pattern it's most
+  likely whatever action lights that LED — not a transport-grid button. Not yet isolated.
+- `91`/`92`: `nav_1`/`nav_2` → **`track_minus`/`track_plus`**, by elimination (the manual's
+  six-button row E has exactly two slots left once 93/94/95/96 are accounted for), ordering
+  picked to match the already-established Patch- < Patch+ convention. Flagged in-code as
+  inferred, NOT individually re-confirmed with its own live press + photo.
+
+**Confirmed unchanged** by replaying the full historical input log (every unique CC the user's
+own full sweep touched) against the manual: faders (CC 0-7 + 14 master), the Select family
+(CC 16-23, 8 LED buttons, matching callout G and the already-confirmed LED CCs), both encoder
+banks (pan 48-55, param 64-71), the jog wheel (111), and the whole transport row
+(80-89) — all sequential, no collisions, no fallthrough to the `cc_N` catch-all. Transport
+specifically confirmed correct by the user after the fix. All three encoder families
+(pan/param/jog) were already correctly classified as relative 2's-complement `CcKind::Encoder`,
+not absolute.
+
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
 controls to CC numbers — raising the question of whether there's some bootstrap/handshake
 where the P1 tells a connected host (or is told) what each physical control is currently
