@@ -59,6 +59,28 @@ everything as Class 1. `dismissOverlay()`, as originally built, doesn't hide an 
 fires the *Background-switch verb* (see below) and the overlay vanishing is a side effect of
 that, not a targeted "hide."
 
+## Verb layer: confirmed on hardware
+
+`switch_background_messages()` (lib.rs) and its `Background` enum are no longer just a
+design on paper — three variants tested directly against real hardware via
+`src/bin/verb_test.rs` and photographed (after fixing an unrelated camera-tuning problem
+that was initially misread as a rendering bug — the webcam's exposure was clipping the
+lighter end of the pad grid's own brightness gradient to solid white; resolved with
+live manual tuning via the new camera-control panel, not a device/protocol issue):
+
+- **`Mixer`**: 8 knobs, `param_names`/`param_values` both rendered correctly
+  (CUT/RES/.../MIX with 1.2k/45%/.../wet).
+- **`PadView`**: all 16 pad slots individually labeled correctly (P1-P16, right rows:
+  A=1-4, B=5-8, C=9-12, D=13-16).
+- **`TransportLauncher`**: `loop_left`/`loop_right` rendered as the `L:`/`R:` bars,
+  `labels` rendered as the 2×4 grid beneath.
+
+Not yet exercised: `FaderSplit`, `FaderRow`, `List`, `Grid`, `PadView3Row`, `Menu`,
+`ListHighlighted`, `SceneButtons`, `BrowserList`, `Reset`. High confidence these also work
+given the schema was derived directly from each one's own confirmed hardware probe
+(Tenth/Fifteenth/Sixteenth findings) and the lowering logic is uniform, but not
+independently verified yet.
+
 ## Interaction matrix — Background × Overlay/Message
 
 Confidence key: **D** = directly tested and photographed. **I** = not directly tested for this
