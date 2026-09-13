@@ -410,18 +410,11 @@ fn start_input_listener(
             if msg.len() >= 3 && (0xB0..=0xBF).contains(&msg[0]) {
                 let event = decode_cc(msg[1], msg[2]);
                 println!("input: {event:?}");
-                if let Ok(value) = serde_json::to_value(&format!("{event:?}")) {
-                    // InputEvent doesn't derive Serialize (it's a debug-only
-                    // decode result so far, see lib.rs) -- store its Debug
-                    // text rather than adding derive(Serialize) purely for
-                    // this, since no consumer needs structured fields yet.
-                    let name = match &event {
-                        InputEvent::Fader { name, .. }
-                        | InputEvent::Encoder { name, .. }
-                        | InputEvent::Button { name, .. }
-                        | InputEvent::Unknown { name, .. } => name.clone(),
-                    };
-                    last_input.lock().unwrap().insert(name, value);
+                // Real structured JSON now (InputEvent derives Serialize,
+                // tagged by "kind") -- a client can dispatch on it directly
+                // instead of getting a Debug-formatted string to parse.
+                if let Ok(value) = serde_json::to_value(&event) {
+                    last_input.lock().unwrap().insert(event.name().to_string(), value);
                 }
             }
         },

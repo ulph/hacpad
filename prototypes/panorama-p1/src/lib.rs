@@ -1017,17 +1017,43 @@ pub fn cc_kind(cc: u8) -> CcKind {
     }
 }
 
-/// A decoded device-originated control input. Confirmed shape for Fader/
-/// Encoder/Button live on hardware; `Unknown` is deliberately a catch-all
-/// rather than a guess. Nothing downstream of this (a "which DAW parameter
-/// does fader_3 mean" mapping layer, or feeding a value back into
-/// `DeviceState`) exists yet -- this is only the byte-level decode.
-#[derive(Debug, Clone, PartialEq)]
+/// A decoded device-originated control input -- semantically what the
+/// physical control IS on the hardware itself (`fader_3`, `pan_encoder_5`,
+/// `play`, `shift`, ...), deliberately NOT tied to whatever `Background` is
+/// currently on screen. Confirmed shape for Fader/Encoder/Button live on
+/// hardware; `Unknown` is deliberately a catch-all rather than a guess.
+/// `#[serde(tag = "kind")]` gives e.g. `{"kind":"Fader","cc":3,
+/// "name":"fader_4","value":85,"normalized":0.669...}` on the wire, so a
+/// client gets a real structured event, not a Debug-formatted string.
+/// Nothing downstream of this (a "which DAW parameter does fader_3 mean"
+/// mapping layer, or feeding a value back into `DeviceState`) exists yet --
+/// this is only the byte-level decode, on purpose: "I do not know yet if
+/// it makes sense to map them to what's currently displayed on the
+/// screen... perhaps just semantically what they ARE on the actual
+/// hardware" -- direct instruction to keep this layer independent of
+/// Background/DeviceState, not a gap to fill in.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind")]
 pub enum InputEvent {
     Fader { cc: u8, name: String, value: u8, normalized: f32 },
     Encoder { cc: u8, name: String, delta: i8 },
     Button { cc: u8, name: String, pressed: bool },
     Unknown { cc: u8, name: String, value: u8 },
+}
+
+impl InputEvent {
+    /// The control's own name (`cc_name(cc)`) -- e.g. `"fader_4"`,
+    /// `"play"` -- shared accessor so a caller doesn't need to match on
+    /// every variant just to key a map by it (see service.rs's
+    /// `last_input`).
+    pub fn name(&self) -> &str {
+        match self {
+            InputEvent::Fader { name, .. }
+            | InputEvent::Encoder { name, .. }
+            | InputEvent::Button { name, .. }
+            | InputEvent::Unknown { name, .. } => name,
+        }
+    }
 }
 
 pub fn decode_cc(cc: u8, value: u8) -> InputEvent {
@@ -1224,5 +1250,73 @@ mod tests {
         let hide_msgs = state.hide_popup();
         let tabs_writes = hide_msgs.iter().filter(|m| m[8] == DISPLAY_ID_MENU_BUTTON).count();
         assert_eq!(tabs_writes, 2, "one tabs write for the bounce template, one for the real restore");
+    }
+
+    /// Device -> host semantic identity, spot-checked against CCs this
+    /// project directly confirmed live on hardware earlier in the session
+    /// (see cc_name's own inline citations) -- not the whole map, just
+    /// enough to catch a decode_cc/cc_kind regression, same spirit as the
+    /// ACK test above checking real captured bytes rather than trusting the
+    /// implementation to keep matching itself.
+    #[test]
+    fn decode_cc_matches_confirmed_hardware_identities() {
+        // Fader 1 (CC 0), absolute value -- confirmed live.
+        match decode_cc(0, 100) {
+            InputEvent::Fader { name, value, normalized, .. } => {
+                assert_eq!(name, "fader_1");
+                assert_eq!(value, 100);
+                assert!((normalized - 100.0 / 127.0).abs() < 0.001);
+            }
+            other => panic!("expected Fader, got {other:?}"),
+        }
+
+        // Pan encoder 1 (CC 48), relative 2's-complement -- confirmed live
+        // ("Own capture confirms CC 48-55 = pan/rotary encoders").
+        match decode_cc(48, 5) {
+            InputEvent::Encoder { name, delta, .. } => {
+                assert_eq!(name, "pan_encoder_1");
+                assert_eq!(delta, 5, "values 1..=63 decode as a positive delta");
+            }
+            other => panic!("expected Encoder, got {other:?}"),
+        }
+        match decode_cc(48, 127) {
+            InputEvent::Encoder { delta, .. } => assert_eq!(delta, -1, "127 decodes as -1 (2's-complement wraparound)"),
+            other => panic!("expected Encoder, got {other:?}"),
+        }
+
+        // Shift (CC 96), a momentary button -- confirmed live (Twenty-eighth
+        // finding).
+        match decode_cc(96, 127) {
+            InputEvent::Button { name, pressed, .. } => {
+                assert_eq!(name, "shift");
+                assert!(pressed);
+            }
+            other => panic!("expected Button, got {other:?}"),
+        }
+        match decode_cc(96, 0) {
+            InputEvent::Button { pressed, .. } => assert!(!pressed),
+            other => panic!("expected Button, got {other:?}"),
+        }
+
+        // Play (CC 84) -- confirmed from source + physical relabel, not
+        // guessed (Twenty-ninth finding corrected an earlier photo-lag
+        // misattribution here specifically).
+        match decode_cc(84, 127) {
+            InputEvent::Button { name, .. } => assert_eq!(name, "play"),
+            other => panic!("expected Button, got {other:?}"),
+        }
+    }
+
+    /// The wire shape a client actually receives -- `#[serde(tag = "kind")]`
+    /// means a real client (index.html) can dispatch on `.kind` directly
+    /// instead of getting a Debug-formatted string (what service.rs did
+    /// before this).
+    #[test]
+    fn input_event_serializes_as_a_tagged_json_object() {
+        let event = decode_cc(0, 100);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "Fader");
+        assert_eq!(json["name"], "fader_1");
+        assert_eq!(json["value"], 100);
     }
 }

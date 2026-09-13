@@ -404,6 +404,18 @@
     </fieldset>
 
     <div id="semantic-status" style="font-size:11px; color:#888; margin-bottom:6px;">no semantic command sent yet</div>
+
+    <hr style="border-color:#333; margin:0 0 12px;">
+    <h3>Device &rarr; host: physical input</h3>
+    <div id="note">
+      Read-only -- decoded straight from lib.rs's `decode_cc` (fader/encoder/button identity,
+      e.g. `fader_3`, `pan_encoder_5`, `play`), deliberately NOT mapped to whatever Background
+      is currently shown above (undecided whether that mapping ever makes sense -- this is
+      just "what the control IS on the hardware"). Snapshot only, not live: service.rs sends
+      this once per fresh connection, and there's no push to an already-open tab yet when the
+      physical control moves again -- reload this page to see a newer snapshot.
+    </div>
+    <div id="input-snapshot" style="font-size:11px; color:#ccc; font-family:monospace; white-space:pre-wrap; max-height:160px; overflow-y:auto; border:1px solid #333; border-radius:4px; padding:6px; background:#0c0c0c;">(no input observed yet this connection)</div>
   </div>
 </div>
 
@@ -749,10 +761,7 @@ function connectService() {
       return;
     }
     if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'inputSnapshot')) {
-      // Device -> host values exist now (service.rs's permanent input
-      // listener, lib.rs's decode_cc) but this page has no UI for them yet --
-      // deliberately ignored here rather than mis-fed through
-      // applyScreenPush, which only knows the raw screen-state shape.
+      applyInputSnapshot(parsed.inputSnapshot);
       return;
     }
     applyScreenPush(parsed, !syncedThisConnection);
@@ -1058,6 +1067,29 @@ function applySemanticState(state) {
   const message = state.messageVisible ? `visible ("${state.messageText || ''}")` : 'hidden';
   el('semantic-status').textContent =
     `background: ${bgType}  |  titleBar: ${(state.titleBar || []).join('/')}  |  bigfont: ${state.bigfont || ''}  |  currentValue: ${state.currentValue || ''}  |  tabs: ${(state.tabs || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
+}
+
+// Rendered from `{"inputSnapshot": {"fader_1": {"kind":"Fader",...}, ...}}` --
+// one entry per control name last observed, sent once on connect (see the
+// #note text above this panel for the "not live yet" caveat). Each value is
+// an InputEvent straight from lib.rs's decode_cc, tagged by "kind" --
+// rendered generically here rather than special-cased per kind, since this
+// panel is deliberately just a raw view of what's decoded, not a UI.
+function describeInputEvent(name, ev) {
+  if (!ev || !ev.kind) return `${name}: ?`;
+  if (ev.kind === 'Fader') return `${name}: ${ev.value}/127 (${Math.round(ev.normalized * 100)}%)`;
+  if (ev.kind === 'Encoder') return `${name}: ${ev.delta > 0 ? '+' : ''}${ev.delta}`;
+  if (ev.kind === 'Button') return `${name}: ${ev.pressed ? 'pressed' : 'released'}`;
+  return `${name}: ${ev.value ?? ''} (unrecognized CC)`;
+}
+
+function applyInputSnapshot(snapshot) {
+  const names = Object.keys(snapshot || {});
+  if (names.length === 0) {
+    el('input-snapshot').textContent = '(no input observed yet this connection)';
+    return;
+  }
+  el('input-snapshot').textContent = names.sort().map(n => describeInputEvent(n, snapshot[n])).join('\n');
 }
 
 renderSimulator();

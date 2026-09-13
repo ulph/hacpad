@@ -220,6 +220,19 @@ code at all**. Partially closed this session:
 - A newly-connecting WebSocket client is now handed that snapshot as
   `{"inputSnapshot": {...}}`, a separate message from the existing screen-state sync, so an
   existing client that doesn't know the key (index.html doesn't yet) just ignores it.
+- `InputEvent` now derives `Serialize` (`#[serde(tag = "kind")]`), so `inputSnapshot` carries
+  real structured events (`{"kind":"Fader","cc":3,"name":"fader_4","value":85,
+  "normalized":0.669...}`) instead of a Debug-formatted string -- index.html has a read-only
+  panel rendering it (generic per `kind`, not per named control). Spot-checked in lib.rs against
+  a handful of CCs this project directly confirmed live earlier (fader 1, pan encoder 1, shift,
+  play), not the whole map — same "check real facts, not the implementation against itself"
+  reasoning as the ACK test.
+- **Deliberately kept independent of `Background`/`DeviceState`**, per direct instruction: "I do
+  not know yet if it makes sense to map them to what's currently displayed on the screen...
+  perhaps just semantically what they ARE on the actual hardware." `InputEvent` names a
+  control by its own hardware identity (`fader_3`, `pan_encoder_5`, `play`) and nothing else —
+  no coupling to whatever Background is currently shown. Not a gap to fill in; a considered
+  choice, until/unless a screen-mapping is actually wanted.
 
 **Still open / NOT done, to avoid overclaiming**:
 
@@ -228,11 +241,6 @@ code at all**. Partially closed this session:
   screen-state edits from another tab. A fresh-connecting client sees the latest known input;
   an already-open one does not get updated in real time. Same pre-existing limitation noted in
   `handle_client`'s own doc comment, now also true for input.
-- **No semantic/business-logic layer above the raw decode.** `InputEvent` says "fader_3 moved
-  to 96/127" — nothing maps that to a DAW parameter, a `Background` field, or a `DeviceState`
-  action (e.g. jog-wheel deltas driving `set_popup_highlight`, or a fader move updating
-  `ctrl_element_value` in the currently-displayed `Background`). That coupling is unbuilt.
-  `InputEvent` and `Background`/`DeviceState` are two disconnected models right now.
 - **The F-Keys button (CC 99) drives a device-native page, not our SysEx display at all** (see
   `f_keys`'s doc comment in lib.rs) — a reminder that not every physical control's effect is
   reachable or overridable through this MIDI-CC decode path.
