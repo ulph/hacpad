@@ -570,6 +570,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Err(e) = device.apply(&initial_for_device) {
         eprintln!("warning: failed to apply default state to device: {e}");
     }
+
+    // Seed the semantic model (device_state) to match what was JUST written
+    // above -- otherwise it starts believing last_background is None, and
+    // hide_popup()/hide_message() silently send nothing the first time
+    // they're used (reported bug: "hiding popup does not really work").
+    // Mirrors default_state()'s own knobs/N1-8/V1-8/TB1-3 content (Mixer
+    // only renders 8 of the 16 name/value slots that get written -- the
+    // other 8 are for FaderSplit's 16-slot layout, not visible here) and its
+    // "hacpad" message, which really is showing on top of it (see the
+    // comment above about not writing the popup at boot -- the message IS
+    // written, unconditionally).
+    device.device_state.seed_background(
+        Background::Mixer {
+            param_names: std::array::from_fn(|i| initial.names[i].clone()),
+            param_values: std::array::from_fn(|i| initial.values[i].clone()),
+        },
+        initial.title_bar.clone(),
+    );
+    device.device_state.seed_message_shown(&initial.message);
+
     let initial_map = match serde_json::to_value(&initial)? {
         serde_json::Value::Object(m) => m,
         _ => unreachable!("ScreenUpdate always serializes to a JSON object"),

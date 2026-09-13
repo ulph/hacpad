@@ -1882,6 +1882,55 @@ real template switch (resending the title bar on the current layout, the same sa
 switch" mechanism `layoutChanged` already used) and unchecks both boxes together, since dismissing one
 this way genuinely dismisses both -- there's no way to clear just one while leaving the other showing.
 
+### Thirty-seventh finding: DeviceState needed boot-seeding, and the popup highlight has no clear value
+
+Two bugs reported directly this session against the new semantic command layer
+(`{"semantic": {...}}` in service.rs, built on `DeviceState` from lib.rs -- see the
+widget-model doc): "hiding popup does not really work" and "there is no unset highlight".
+Root-caused and confirmed on real hardware, not assumed:
+
+1. **`hide_popup`/`hide_message` were a silent no-op the first time they were ever used.**
+   `DeviceState::default()` starts with `last_background: None`; `hide_popup`/`hide_message`
+   restore `last_background` and do nothing if it's `None` (by design -- there's genuinely
+   nothing to restore to). But `service.rs` never told its `DeviceState` what was actually
+   already on the real device from the boot-time raw write (`default_state()`) -- so the
+   VERY FIRST semantic `showPopup`/`hidePopup` pair on a freshly-started service always
+   failed silently: `popup_visible()` correctly flipped to `false` (misleadingly reporting
+   success), but zero SysEx bytes were sent, so the real screen never changed. Reproduced as
+   a unit test (`hide_popup_is_a_silent_noop_without_a_prior_switch_background`, lib.rs) and
+   confirmed the fix live over the WebSocket from a fresh service process (no prior semantic
+   `switchBackground` call at all): `showPopup` → `hidePopup` now correctly restores the
+   seeded Mixer background and reports it. Fix: `DeviceState` gained `seed_background`/
+   `seed_message_shown` (record state without sending bytes -- the caller already wrote
+   those bytes some other way), and `service.rs`'s boot sequence now calls them right after
+   the raw `default_state()` write, mirroring exactly what was just put on screen (Mixer,
+   `N1`-`N8`/`V1`-`V8`, `TB1`-`TB3`, plus the "hacpad" message that's genuinely showing on
+   top of it at boot).
+
+2. **The popup highlight (CC 111 / `selectedMenuItem`) has no value that clears it.**
+   Confirmed directly via the webcam, twice, with generous (1-1.5s) settle time between
+   each step to rule out display-lag artifacts (a real, separate effect also observed this
+   session -- rapid-fire semantic commands with no delay can show 1-2 renders behind for a
+   few seconds, confirmed to just be a display/MJPEG-capture timing issue, not a dropped
+   write, by re-photographing later with no new command sent and seeing it catch up):
+   showed a popup, set the highlight to a real row (2 or 3), then sent `0`, `127`, and `255`
+   to the highlight CC in turn. In every case the ORIGINAL row stayed highlighted --
+   none of these values moved it, cleared it, or had any visible effect at all. So CC 111
+   apparently only accepts values within the popup's actual item range and silently ignores
+   (rather than clamps-to-boundary or clears-on) anything outside it. **There is no known
+   way to make an open popup show with zero rows highlighted once a highlight has been set
+   -- the only confirmed way to make the highlight bar disappear is to dismiss the entire
+   popup** (`hide_popup`, which does a real Background switch). Documented as a genuine
+   hardware limitation, not a missing button: `index.html`'s semantic panel now says this
+   explicitly next to Set Highlight, instead of implying an unset value exists.
+
+   Also incidentally confirmed while investigating this (after ruling out a false alarm from
+   the same display-lag effect): shrinking a popup from 8 items to 2 DOES correctly clear
+   the trailing entries once given enough time to render -- no stale-item bleed-through, so
+   `write_page_menu`'s per-call entry count is trustworthy; the earlier appearance of a
+   stale "Item5" mid-investigation was the same lag artifact, re-confirmed by waiting and
+   re-capturing rather than assumed away.
+
 ### Open question: initial CC-mapping bootstrap (unconfirmed, not investigated)
 
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical

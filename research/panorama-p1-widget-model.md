@@ -52,7 +52,7 @@ time. What was never tabulated as a matrix is Overlay × Background and Message 
 |---|---|---|---|
 | **1. State** | Chrome, Content, independent LEDs (select/menu buttons, Play/Record/Loop/Mute/Solo/etc.) | A real, stable "current value" exists on the device. Not sending it leaves it as-is. Idempotent. | Send the new value. |
 | **2. Select-or-clear register** | Status LED strip (CC 99-102, Thirty-fifth finding) | One of N positions active, or none. A genuine clear primitive exists. | Write 127 to the CC for the desired position, or 0 to *any* of the group's CCs to clear all. **Must be sent as clear-then-set as one atomic unit** — diffing per-CC independently breaks it. |
-| **3. Trigger-only, no clear primitive** | Message, popup menu (Overlay layer) | No device-tracked "current value" to diff against. Every send is a fresh one-shot "show this now." | **No targeted clear exists.** Only: (a) never send it, or (b) a real Background switch, which resets Background+Content (and, per the z-order finding above, Message — but not a currently-open popup, which needs its own switch too since it's a *different* trigger). |
+| **3. Trigger-only, no clear primitive** | Message, popup menu (Overlay layer), popup highlight (CC 111) | No device-tracked "current value" to diff against. Every send is a fresh one-shot "show this now." | **No targeted clear exists.** Only: (a) never send it, or (b) a real Background switch, which resets Background+Content (and, per the z-order finding above, Message — but not a currently-open popup, which needs its own switch too since it's a *different* trigger). The highlight is the same story one level down: confirmed directly (Thirty-seventh finding, protocol notes) that 0/127/255 all leave the last-set row highlighted rather than clearing it — dismissing the *whole popup* is the only way to make a highlight disappear, there's no way to un-highlight a row while leaving the popup open. |
 
 **The correction this document exists to capture**: the simulator's "differential push"
 architecture (diff against last-sent value, resend only on change) implicitly treats
@@ -248,3 +248,8 @@ code at all**. Partially closed this session:
 - Message-vs-popup z-order is still contradictory (see the layer table) — not re-isolated yet.
 - 10 of 13 `Background` variants remain schema-only, never exercised through the verb layer.
 - No mid-session re-verification exists yet — only a one-shot check at `Device::connect()`.
+- The raw and semantic perspectives (service.rs's `ScreenUpdate`/`apply()` vs `DeviceState`)
+  are deliberately never reconciled — a raw-panel edit doesn't update `device_state`, so a
+  semantic `hidePopup`/`hideMessage` after mixing the two can restore a Background that no
+  longer matches what a raw edit put on screen. Boot state is seeded correctly (Thirty-seventh
+  finding), but nothing keeps the two in sync after that.

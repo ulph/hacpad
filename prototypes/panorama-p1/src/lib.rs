@@ -428,6 +428,32 @@ impl DeviceState {
         msgs
     }
 
+    /// Records what's already on the real device WITHOUT sending anything --
+    /// for a caller that wrote a Background's content through some OTHER
+    /// path (e.g. service.rs's raw per-field protocol at boot) and wants
+    /// `hide_popup`/`hide_message` to have a correct restore target from the
+    /// very first semantic command, instead of requiring an actual
+    /// `switch_background` call first. A fresh `DeviceState` starts with
+    /// `last_background: None`, and `hide_popup`/`hide_message` silently
+    /// send nothing when there's nothing to restore to -- exactly the
+    /// reported bug ("hiding popup does not really work") when the real
+    /// device's boot state was never reflected here. Not a device read-back
+    /// (none exists) -- purely "trust the caller, they just wrote this".
+    pub fn seed_background(&mut self, bg: Background, title_bar: Vec<String>) {
+        self.last_background = Some(bg);
+        self.last_title_bar = title_bar;
+        self.popup_visible = false;
+        self.message_visible = false;
+    }
+
+    /// Same idea as `seed_background`, for a message already showing on the
+    /// real device (e.g. the "hacpad" boot baseline) that this `DeviceState`
+    /// never actually sent itself.
+    pub fn seed_message_shown(&mut self, text: &str) {
+        self.message_visible = true;
+        self.last_message_text = Some(text.to_string());
+    }
+
     /// Shows the popup -- draws on top of whatever Background is currently
     /// active without changing `last_background` at all (it's hardcoded to
     /// page_template=0 regardless, per `write_page_menu`'s doc comment).
@@ -860,5 +886,29 @@ mod tests {
     fn no_ack_expected_for_0x08_or_0x06() {
         assert!(expected_ack(&sysex(&INIT_1)).is_none());
         assert!(expected_ack(&write_bigfont(16, "X")).is_none());
+    }
+
+    /// Reproduces the reported bug ("hiding popup does not really work"):
+    /// `hide_popup`/`hide_message` restore `last_background`, but a fresh
+    /// `DeviceState` starts with `last_background: None` -- so calling
+    /// `show_popup` before ANY `switch_background` leaves nothing to
+    /// restore, and `hide_popup` silently sends zero bytes even though it
+    /// still (incorrectly, from the caller's perspective) reports
+    /// `popup_visible() == false` afterward. This is exactly the trap
+    /// service.rs fell into: it never seeded `device_state` at boot, so any
+    /// semantic popup/message shown before the first semantic
+    /// `switchBackground` command was permanently stuck -- fixed there by
+    /// seeding `last_background` at startup to match what was actually
+    /// written to the real device.
+    #[test]
+    fn hide_popup_is_a_silent_noop_without_a_prior_switch_background() {
+        let mut state = DeviceState::default();
+        state.show_popup(&["A".to_string(), "B".to_string()]);
+        assert!(state.popup_visible());
+        let msgs = state.hide_popup();
+        assert!(msgs.is_empty(), "no last_background to restore to -- nothing can be sent");
+        // The flag flips anyway, which is the misleading part: a caller
+        // reading popup_visible() alone would believe the dismiss worked.
+        assert!(!state.popup_visible());
     }
 }
