@@ -1038,11 +1038,18 @@ pub fn cc_name(cc: u8) -> String {
         // guess ("setActiveDisplayPage(internalPage)") had assumed. Swapped with CC 90 (see
         // its own comment above) -- the two were reversed.
         103 => "f_keys".to_string(),
-        106 => "menu_button_0".to_string(), // 5th of the "menu buttons" LED range (106-110); not otherwise distinguished from 107-110
+        // The five menu buttons directly under the display (callout D in the official Nektar
+        // manual: "Five menu buttons. Their functions always correspond to the menu label at
+        // the bottom of the TFT display"). Named as ONE consistent 0-indexed family rather
+        // than the earlier mix of `menu_button_0`/`screen_button_N`/`menu_enter`, which made
+        // the same physical row look like three unrelated things. The `_exit`/`_enter`
+        // suffixes are kept because both are confirmed-live behaviors specific to those two
+        // positions, not just guesses.
+        106 => "screen_button_0".to_string(),
         107 => "screen_button_1".to_string(),
         108 => "screen_button_2".to_string(),
         109 => "screen_button_3_exit".to_string(), // confirmed live: closes the popup menu (onMenuCancel) when one is open
-        110 => "menu_enter".to_string(), // confirmed live: onMenuEnter when a popup menu is open
+        110 => "screen_button_4_enter".to_string(), // confirmed live: onMenuEnter when a popup menu is open
         111 => "jog_wheel".to_string(), // confirmed live: relative encoder ticks; also reused as the popup-menu highlight-index CC in the output direction (Twenty-seventh finding)
         _ => format!("cc_{cc}"),
     }
@@ -1161,16 +1168,24 @@ pub fn decode_cc(cc: u8, value: u8) -> InputEvent {
 pub struct InputControlState {
     /// The most recent decoded event for this control, verbatim.
     pub last_event: Option<InputEvent>,
-    /// A single 0..=127 "current value" for this control, so a caller
-    /// doesn't have to match on `last_event`'s kind just to get a number:
-    /// Fader mirrors the raw absolute value; Button is 127 while pressed,
-    /// 0 while released (matching the raw CC convention); Encoder has no
-    /// absolute value of its own on the wire (relative 2's-complement
-    /// deltas) -- this is `InputState`'s OWN running accumulation of every
-    /// delta seen so far, clamped to 0..=127, a soft position estimate we
-    /// invent, not a hardware fact (there is no read-back for input either,
-    /// same honesty as `DeviceState`).
-    pub value: u8,
+    /// A single number for this control, so a caller doesn't have to match
+    /// on `last_event`'s kind just to get one. Signed because Encoder's
+    /// value genuinely can be:
+    /// - **Fader**: the raw absolute value, 0..=127.
+    /// - **Button**: 127 while pressed, 0 while released (the raw CC
+    ///   convention).
+    /// - **Encoder**: the **last delta**, e.g. `+3` / `-3`. NOT an
+    ///   accumulated position. An earlier version of this accumulated every
+    ///   delta into a clamped 0..=127 "soft position" -- that was an
+    ///   invention of ours, not a hardware fact, and is gone: these encoders
+    ///   are endless relative controls with no position to report.
+    ///   **Confirmed empirically** (Thirty-ninth finding) by replaying 301
+    ///   real encoder events across all 17 of them (8 pan, 8 param, jog):
+    ///   the only values ever emitted are `+3` and `-3`, both directions
+    ///   seen -- so one physical detent is ±3, not ±1, and there is never
+    ///   an absolute sweep like a fader produces.
+    /// - **Unknown**: the raw value, uninterpreted.
+    pub value: i16,
 }
 
 /// Device -> host state: the last known value/event for every semantic
@@ -1196,12 +1211,11 @@ impl InputState {
         let event = decode_cc(cc, value);
         let entry = self.controls.entry(event.name().to_string()).or_default();
         match &event {
-            InputEvent::Fader { value, .. } => entry.value = *value,
+            InputEvent::Fader { value, .. } => entry.value = *value as i16,
             InputEvent::Button { pressed, .. } => entry.value = if *pressed { 127 } else { 0 },
-            InputEvent::Encoder { delta, .. } => {
-                entry.value = (entry.value as i16 + *delta as i16).clamp(0, 127) as u8;
-            }
-            InputEvent::Unknown { value, .. } => entry.value = *value,
+            // Last delta, NOT an accumulation -- see InputControlState::value.
+            InputEvent::Encoder { delta, .. } => entry.value = *delta as i16,
+            InputEvent::Unknown { value, .. } => entry.value = *value as i16,
         }
         entry.last_event = Some(event.clone());
         event
@@ -1482,28 +1496,32 @@ mod tests {
         assert!(state.get("never_touched").is_none());
     }
 
-    /// Encoders have no absolute value on the wire (relative 2's-complement
-    /// deltas) -- `InputState` invents one by accumulating every delta seen,
-    /// clamped to 0..=127 so it can't run away in either direction.
+    /// Encoders are endless relative controls with no position to report, so
+    /// `InputState` stores the LAST DELTA, never an accumulation (an earlier
+    /// version accumulated into a clamped 0..=127 "soft position" -- our own
+    /// invention, now removed). Uses ±3 because that's what the real hardware
+    /// actually emits: 301 replayed events across all 17 encoders contained
+    /// only +3 and -3, nothing else (Thirty-ninth finding).
     #[test]
-    fn input_state_accumulates_encoder_deltas_clamped_to_0_127() {
+    fn input_state_stores_last_encoder_delta_without_accumulating() {
         let mut state = InputState::default();
-        state.observe(48, 10); // pan_encoder_1, +10
-        assert_eq!(state.get("pan_encoder_1").unwrap().value, 10);
-        state.observe(48, 5); // +5 -> 15
-        assert_eq!(state.get("pan_encoder_1").unwrap().value, 15);
-        state.observe(48, 127); // -1 -> 14
-        assert_eq!(state.get("pan_encoder_1").unwrap().value, 14);
 
-        // Drive it below 0 and above 127 -- must clamp, not wrap or panic.
-        for _ in 0..20 {
-            state.observe(48, 127); // -1 each time
-        }
-        assert_eq!(state.get("pan_encoder_1").unwrap().value, 0, "clamped at the floor");
-        for _ in 0..200 {
-            state.observe(48, 1); // +1 each time
-        }
-        assert_eq!(state.get("pan_encoder_1").unwrap().value, 127, "clamped at the ceiling");
+        state.observe(48, 3); // pan_encoder_1, one detent clockwise
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 3);
+
+        // A second identical detent must NOT sum to 6 -- it's still +3.
+        state.observe(48, 3);
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, 3, "last delta, not accumulated");
+
+        // Counter-clockwise reports negative, and replaces rather than nets out.
+        state.observe(48, 125); // 2's complement: -3
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, -3);
+        state.observe(48, 125);
+        assert_eq!(state.get("pan_encoder_1").unwrap().value, -3, "still just the last delta");
+
+        // Faders remain absolute, unaffected by the encoder change.
+        state.observe(0, 42);
+        assert_eq!(state.get("fader_1").unwrap().value, 42);
     }
 
     #[test]

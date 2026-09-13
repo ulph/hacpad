@@ -1153,6 +1153,12 @@ function describeInputEvent(ev) {
   if (ev.lastEvent.kind === 'Button') {
     return { text: ev.lastEvent.pressed ? 'ON' : 'off', pressed: !!ev.lastEvent.pressed };
   }
+  if (ev.lastEvent.kind === 'Encoder') {
+    // `value` is the LAST DELTA for encoders, not a position -- these are
+    // endless relative controls (confirmed: the hardware only ever emits
+    // ±3, one detent). Show the sign so direction is obvious.
+    return { text: `${ev.value > 0 ? '+' : ''}${ev.value}`, pressed: false };
+  }
   return { text: `${ev.value}`, pressed: false };
 }
 

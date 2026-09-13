@@ -241,14 +241,18 @@ code at all**. Partially closed this session:
   can also have a state. remember what value each semantical input's last value is" / "the
   mapping from cc to semantical input is the first step"): `decode_cc` gives the semantic
   identity (step one); `InputState::observe(cc, value)` wraps it and remembers a single
-  0..=127 "current value" per control name, keyed the same way (`fader_3`, `shift`, ...).
-  Fader/Button map straightforwardly (absolute value; 127/0 for pressed/released). Encoders
-  have no absolute value on the wire at all (relative 2's-complement deltas) — `InputState`
-  invents one by accumulating every delta it's seen, clamped to 0..=127, explicitly documented
-  as *our own running estimate*, not a hardware fact (there's no read-back for input, same as
-  `DeviceState`'s own honesty about output). `service.rs`'s permanent input listener now calls
-  `observe` directly instead of hand-rolling its own HashMap<String, Value>, so `InputState`
-  really is the one place this state lives, same as `DeviceState` on the output side.
+  number per control name, keyed the same way (`fader_3`, `shift`, ...). Fader/Button map
+  straightforwardly (absolute 0..=127; 127/0 for pressed/released). **Encoders store the LAST
+  DELTA, not a position** — corrected per direct instruction ("do not accumulate their value!
+  instead, show the last diff"). An earlier version accumulated deltas into a clamped 0..=127
+  "soft position"; that was *our invention*, not a hardware fact, and is gone. These are
+  endless relative controls with no position to report, now **confirmed empirically** rather
+  than assumed: replaying 301 real encoder events across all 17 of them (8 pan, 8 param, jog
+  wheel) found only `+3` and `-3`, both directions, nothing else — so one detent is ±3, not
+  ±1, and there is never an absolute sweep like a fader produces. `service.rs`'s permanent
+  input listener calls `observe` directly instead of hand-rolling its own
+  HashMap<String, Value>, so `InputState` really is the one place this state lives, same as
+  `DeviceState` on the output side.
 
 **Still open / NOT done, to avoid overclaiming**:
 
