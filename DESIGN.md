@@ -215,6 +215,12 @@ The plugin-layer SDK may declare custom mappings, but those mappings are still m
 
 Hardware only needs one integration path: either the DAW host SDK or the plugin-layer SDK. In either case, the mapping markup is the shared contract that describes how the controller should behave.
 
+### Auxiliary path: emulate a standard control surface
+
+A third, lower-effort path exists as a fallback when neither an SDK nor a plugin host is available for a given DAW: **present a virtual MIDI device and speak a control-surface dialect the DAW already understands** — Mackie Control Universal (MCU), HUI, or the DAW's own native remote protocol. Most DAWs auto-map a generic MCU surface, so one implementation reaches many hosts at once.
+
+The trade is breadth for depth. This yields only what the dialect exposes — transport, faders, basic mixer, a handful of assignable encoders — not deep plugin-parameter control and not the rich on-screen feedback the SDK/plugin paths give. It is *some* DAW control, universally, with no vendor cooperation; it is not a substitute for the mapping-driven contract above. Useful as a day-one bring-up for a new DAW, or as a permanent floor for hosts we never integrate deeply.
+
 A dedicated **sidecar process** is required to make this architecture make sense. The sidecar should run as a separate OS-level process and perform the actual communication to/from hardware. It should own the implementation drivers that connect the sidecar runtime to the physical controller and relay host/plugin events to the hardware.
 
 The runtime protocol should also handle multiple DAW instances and any associated conflict resolution, even if that usage is rare.
