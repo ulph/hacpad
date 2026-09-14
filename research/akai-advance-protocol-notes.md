@@ -686,6 +686,45 @@ at 0xC4BB58 / 0xC4CAE0. That is the next step.
 Camera-verified so far this session: set_active_page works (panel leaves the
 SETUP page). Not yet drawing our own pixels.
 
+## Sixteenth — the widget/page table map, and a realistic scope read
+
+Which cmd-2 ops touch which RAM table (a fast way to carve the ~50 ops into
+subsystems):
+
+| Table | RAM | Ops | Meaning |
+|---|---|---|---|
+| widgetTblA | 0x2000EF54 | 0x00-0x06, 0x0d, 0x3a | widgets |
+| pageTbl (tblB) | 0x2000EF5C | 0x0d-0x11, 0x22, 0x26 | pages |
+| tblC | 0x20010CE4 | 0x10, 0x11, 0x31, 0x32, 0x34 | text_data / elements |
+| scriptTbl | 0x2000F360 | 0x15, 0x39, 0x3a, 0x3b, 0x3c | Lua slots |
+| activePage | 0x200011D0 | 0x10, 0x11 | current page |
+
+Confirmed pieces of the draw recipe:
+- op 0x00 create_widget, op 0x2f configure_widget (12-field style), op 0x10
+  set_active_page (camera-verified), op 0x39/0x3b/0x3c script lifecycle.
+- **op 0x3a (want 5) binds a widget to a script** — it touches both scriptTbl and
+  the widget table. BUT its worker (0x08066318) runs a Jenkins-style hash
+  (magic 0xFEEDBEF3), so the binding is keyed by a NAME HASH, not a raw slot id.
+  That means our script has to be addressable by the hash VIP/firmware expects,
+  which is an extra wrinkle.
+- Page create + widget->page attach live among ops 0x0d/0x0e/0x0f/0x11 (pageTbl),
+  not yet individually pinned.
+
+### Scope
+
+Getting our own rect drawn is a multi-op choreography over four interlocking
+tables (create page, create widget, set geometry, hash-bind a script or use a
+self-drawing widget type, attach to page, show page), several of whose exact
+argument layouts are still unknown. This is a substantial reverse-engineering
+effort, not a next-command win. What IS won and camera-verified: we can load and
+run Lua on the device, and we can control which page is active.
+
+The VIP_x64.dll disassembly shortcut stalled: its page/widget log strings
+("created all hardware pages", etc.) are in an embedded data blob with no
+RIP-relative or absolute code references found, so the message-builders are not
+trivially anchored by those strings. A better VIP anchor would be the SysEx
+send path (the code writing the F0 47 00 2F 02 header), or the op-byte immediates.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
