@@ -34,41 +34,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     default_conn.send(&sysex(&INIT_2))?;
     sleep(Duration::from_millis(200));
 
-    let title_bar = vec!["VERB1".to_string(), "VERB2".to_string(), "VERB3".to_string()];
+    let title_bar: [String; 3] = ["VERB1".into(), "VERB2".into(), "VERB3".into()];
 
     let bg = match which.as_str() {
         "pads" => Background::PadView {
-            pad_names: [
-                "P1".into(), "P2".into(), "P3".into(), "P4".into(),
-                "P5".into(), "P6".into(), "P7".into(), "P8".into(),
-                "P9".into(), "P10".into(), "P11".into(), "P12".into(),
-                "P13".into(), "P14".into(), "P15".into(), "P16".into(),
-            ],
-            pad_states: [
-                PadState::Lit, PadState::Lit, PadState::Default, PadState::Default,
-                PadState::Default, PadState::Default, PadState::Default, PadState::Default,
-                PadState::Default, PadState::Default, PadState::Default, PadState::Default,
-                PadState::Default, PadState::Default, PadState::Default, PadState::Lit,
-            ],
+            // One Pad per physical pad -- label and lit state together,
+            // instead of two parallel 16-lists aligned by index.
+            pads: std::array::from_fn(|i| Pad {
+                name: format!("P{}", i + 1),
+                state: if i == 0 || i == 1 || i == 15 { PadState::Lit } else { PadState::Default },
+            }),
         },
         "launcher" => Background::TransportLauncher {
             loop_left: "L:1.1.1".to_string(),
             loop_right: "R:5.1.1".to_string(),
-            labels: [
-                "T1".into(), "T2".into(), "T3".into(), "T4".into(),
-                "T5".into(), "T6".into(), "T7".into(), "T8".into(),
-            ],
+            buttons: std::array::from_fn(|i| format!("T{}", i + 1)),
         },
-        "mixer" | "overlaytest" => Background::Mixer {
-            param_names: [
-                "CUT".into(), "RES".into(), "ATK".into(), "DEC".into(),
-                "SUS".into(), "REL".into(), "DRV".into(), "MIX".into(),
-            ],
-            param_values: [
-                "1.2k".into(), "45%".into(), "12ms".into(), "80ms".into(),
-                "0dB".into(), "200ms".into(), "30%".into(), "wet".into(),
-            ],
-        },
+        "mixer" | "overlaytest" => {
+            const NAMES: [&str; 8] = ["CUT", "RES", "ATK", "DEC", "SUS", "REL", "DRV", "MIX"];
+            const VALUES: [&str; 8] = ["1.2k", "45%", "12ms", "80ms", "0dB", "200ms", "30%", "wet"];
+            Background::Mixer {
+                knobs: std::array::from_fn(|i| Knob {
+                    name: NAMES[i].to_string(),
+                    value: VALUES[i].to_string(),
+                }),
+            }
+        }
         other => {
             eprintln!("unknown background {other:?}, expected pads|launcher|mixer|overlaytest");
             std::process::exit(1);

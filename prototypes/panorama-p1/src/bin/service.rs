@@ -177,19 +177,43 @@ fn default_state() -> ScreenUpdate {
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "camelCase")]
 enum SemanticCommand {
+    /// `title_bar` is exactly 3 segments and each `Background` variant
+    /// carries its own real fields (paired per control -- `knobs: [{name,
+    /// value}; 8]` rather than two parallel lists), so the wire shape is
+    /// checked by serde instead of a caller discovering a wrong-length CSV
+    /// at render time.
     #[serde(rename_all = "camelCase")]
-    SwitchBackground { background: Background, title_bar: Vec<String> },
+    SwitchBackground { background: Background, title_bar: [String; 3] },
+    /// Genuinely open-ended (the popup paginates), so a list here is right.
     ShowPopup { items: Vec<String> },
     #[serde(rename_all = "camelCase")]
     SetPopupHighlight { row: u8 },
+    /// Best-effort: the highlight CC has no confirmed clear value, so this
+    /// re-sends the popup's content instead -- see
+    /// `DeviceState::clear_popup_highlight`.
+    ClearPopupHighlight,
     HidePopup,
     ShowMessage { text: String },
     HideMessage,
-    SetFooter { tabs: Vec<String> },
+    /// Exactly 5 tabs -- the real slot count.
+    SetFooter { tabs: [String; 5] },
     #[serde(rename_all = "camelCase")]
     SetHeaderBigFont { text: String },
     #[serde(rename_all = "camelCase")]
     SetHeaderCurrentValue { text: String },
+    /// One named LED, not a whole-list resync of raw CC numbers. `Led` is
+    /// flattened so the wire stays flat -- `{"cmd":"setLed","led":"play",
+    /// "on":true}` and `{"cmd":"setLed","led":"select","index":3,"on":true}`
+    /// -- rather than nesting an object under its own tag name.
+    SetLed {
+        #[serde(flatten)]
+        led: Led,
+        on: bool,
+    },
+    /// The 4-LED status strip is a one-of-N register, not 4 bits -- so it
+    /// keeps its own verb. `None` clears the whole strip.
+    #[serde(rename_all = "camelCase")]
+    SetStatusLed { position: Option<u8> },
 }
 
 struct Device {
@@ -314,6 +338,25 @@ impl Device {
             }
             SemanticCommand::SetHeaderCurrentValue { text } => {
                 self.default_conn.send(&self.device_state.set_header_current_value(text))?;
+            }
+            SemanticCommand::ClearPopupHighlight => {
+                for msg in self.device_state.clear_popup_highlight() {
+                    self.default_conn.send(&msg)?;
+                }
+            }
+            SemanticCommand::SetLed { led, on } => {
+                match self.device_state.set_led(led, on) {
+                    Some(msg) => self.default_conn.send(&msg)?,
+                    // Out-of-range family index -- say so rather than
+                    // silently addressing some unrelated CC.
+                    None => eprintln!("setLed: {led:?} has no CC (index out of range), nothing sent"),
+                }
+            }
+            SemanticCommand::SetStatusLed { position } => {
+                for msg in status_led_messages(position) {
+                    self.default_conn.send(&msg)?;
+                    thread::sleep(Duration::from_millis(2));
+                }
             }
         }
         Ok(())
@@ -622,10 +665,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // written, unconditionally).
     device.device_state.seed_background(
         Background::Mixer {
-            param_names: std::array::from_fn(|i| initial.names[i].clone()),
-            param_values: std::array::from_fn(|i| initial.values[i].clone()),
+            knobs: std::array::from_fn(|i| Knob {
+                name: initial.names[i].clone(),
+                value: initial.values[i].clone(),
+            }),
         },
-        initial.title_bar.clone(),
+        std::array::from_fn(|i| initial.title_bar.get(i).cloned().unwrap_or_default()),
     );
     device.device_state.seed_message_shown(&initial.message);
 

@@ -2058,6 +2058,41 @@ specifically confirmed correct by the user after the fix. All three encoder fami
 (pan/param/jog) were already correctly classified as relative 2's-complement `CcKind::Encoder`,
 not absolute.
 
+### Fortieth finding: the popup highlight CAN be cleared -- by repopulating, not by any CC value
+
+The Thirty-seventh finding established, correctly, that the highlight CC has no clear value:
+0, 127 and 255 were each sent to a popup showing a highlighted row and photographed, and every
+one left the bar exactly where it was, because the CC only accepts in-range rows. The mistake
+was the inference drawn from that -- that dismissing the whole popup must therefore be the only
+way to lose the bar.
+
+Asked directly for a "clear highlight" verb, which forced the question again. Implemented
+`DeviceState::clear_popup_highlight` to re-send the popup's own content (the one remaining
+candidate short of dismissing it) and photographed the result: **the highlight bar is gone and
+the popup is still open**, items intact. So repopulating resets the selection.
+
+Worth noting as a methodology point: the earlier finding tested one mechanism thoroughly
+(values on the highlight CC) and then generalised from its failure to "there is no way."
+Testing a *different* mechanism found one. A negative result about one approach isn't a
+negative result about the goal.
+
+### Semantic naming pass: hardware identity over DAW reassignment
+
+Renamed across `cc_name` so every control reads as what it IS on the unit, using the official
+manual's labels, with the Bitwig driver's own (different) meanings kept as citations rather
+than as names:
+- `99-102`: `f_keys`/`browser_cancel_1/2/3` -> `status_led_0..3`. All four are the confirmed
+  status-LED strip (Thirty-fifth finding); the browser-cancel handlers are DAW-side
+  reassignments of those same positions.
+- `88`: `undo_redo` -> `undo` (silkscreen), Shift-gated redo noted in the comment.
+- `86`/`87`: `loop_in`/`loop_out` -> `seek_prev`/`seek_next`. Silkscreened as the rewind and
+  forward symbols with an added vertical bar -- the conventional seek-to-marker pair. The
+  getInPosition/getOutPosition calls are again the DAW-side meaning.
+- `97`/`98`: dropped the `_pressed` suffix -> `toggle_mute`/`toggle_view`, matching the
+  manual's own TOGGLE/MUTE and TOGGLE/VIEW button names.
+- `106-110`: unified into one family, `screen_button_0` .. `screen_button_4_enter` (was a mix
+  of `menu_button_0`, `screen_button_N` and `menu_enter` for one physical row of five).
+
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
 controls to CC numbers — raising the question of whether there's some bootstrap/handshake
 where the P1 tells a connected host (or is told) what each physical control is currently

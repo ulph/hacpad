@@ -392,14 +392,14 @@
       <div class="row" style="gap:6px;">
         <button id="sem-popup-show-btn" type="button">Show Popup</button>
         <button id="sem-popup-highlight-btn" type="button">Set Highlight</button>
+        <button id="sem-popup-clear-highlight-btn" type="button">Clear Highlight</button>
         <button id="sem-popup-hide-btn" type="button">Hide Popup</button>
       </div>
       <div style="font-size:10px; color:#666; margin-top:6px;">
-        Confirmed on hardware: the highlight CC has no clear value -- 0/127/255 all leave
-        whatever row was last highlighted exactly where it was (see the "Thirty-seventh
-        finding" in the protocol notes). There is no "Unset Highlight" button because there
-        is nothing for it to send; Hide Popup (a real Background switch) is the only
-        confirmed way to make a highlighted row go away.
+        Clear Highlight works by re-sending the popup's content, NOT by sending a "none" value
+        to the highlight CC -- that CC has no clear value (0/127/255 all leave the bar exactly
+        where it was, Thirty-seventh finding). Repopulating clears it while leaving the popup
+        open, confirmed on hardware (Fortieth finding).
       </div>
     </fieldset>
 
@@ -409,6 +409,19 @@
         <button id="sem-message-show-btn" type="button">Show Message</button>
         <button id="sem-message-hide-btn" type="button">Hide Message</button>
       </div>
+    </fieldset>
+
+    <fieldset>
+      <label>LEDs -- by name, one verb per LED</label>
+      <div style="font-size:10px; color:#666; margin-bottom:6px;">
+        `setLed` addresses one LED by the control it lights (`play`, `select` index 3), not by
+        raw CC and not as a whole-list resync. The 4-LED status strip is deliberately NOT here:
+        it's one of-N register, not 4 independent bits (confirmed hardware mutex), so it keeps
+        its own verb below.
+      </div>
+      <div id="sem-led-panel" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+      <label style="margin-top:8px;">Status strip (one-of-N, or off)</label>
+      <div id="sem-status-led-panel" style="display:flex; gap:4px;"></div>
     </fieldset>
 
     <div id="semantic-status" style="font-size:11px; color:#888; margin-bottom:6px;">no semantic command sent yet</div>
@@ -1064,6 +1077,50 @@ el('sem-popup-show-btn').addEventListener('click', () => {
 el('sem-popup-highlight-btn').addEventListener('click', () => {
   sendSemantic({ cmd: 'setPopupHighlight', row: parseInt(el('in-menuhighlight').value, 10) || 0 });
 });
+el('sem-popup-clear-highlight-btn').addEventListener('click', () => sendSemantic({ cmd: 'clearPopupHighlight' }));
+
+// One toggle per NAMED led -- mirrors lib.rs's `Led` enum (kept in sync by
+// hand; the Rust side is the source of truth for which exist).
+const SEMANTIC_LEDS = [
+  { label: 'play', cmd: { led: 'play' } },
+  { label: 'record', cmd: { led: 'record' } },
+  { label: 'loop', cmd: { led: 'loop' } },
+  { label: 'mute', cmd: { led: 'mute' } },
+  { label: 'solo', cmd: { led: 'solo' } },
+  { label: 'autoWr', cmd: { led: 'automationWrite' } },
+  { label: 'cc25?', cmd: { led: 'cc25Uncharacterized' } },
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map(i => ({ label: `sel${i}`, cmd: { led: 'select', index: i } })),
+  ...[0, 1, 2, 3, 4].map(i => ({ label: `scr${i}`, cmd: { led: 'screenButton', index: i } })),
+];
+
+(function buildSemanticLedPanel() {
+  const panel = el('sem-led-panel');
+  SEMANTIC_LEDS.forEach(({ label, cmd }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.dataset.on = 'false';
+    btn.style.cssText = 'font-size:10px; padding:2px 5px;';
+    btn.addEventListener('click', () => {
+      const on = btn.dataset.on !== 'true';
+      btn.dataset.on = String(on);
+      btn.style.background = on ? '#e0a030' : '';
+      btn.style.color = on ? '#000' : '';
+      sendSemantic(Object.assign({ cmd: 'setLed', on }, cmd));
+    });
+    panel.appendChild(btn);
+  });
+
+  const statusPanel = el('sem-status-led-panel');
+  [null, 1, 2, 3, 4].forEach(pos => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = pos === null ? 'off' : `status${pos}`;
+    btn.style.cssText = 'font-size:10px; padding:2px 5px;';
+    btn.addEventListener('click', () => sendSemantic({ cmd: 'setStatusLed', position: pos }));
+    statusPanel.appendChild(btn);
+  });
+})();
 el('sem-popup-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hidePopup' }));
 
 el('sem-message-show-btn').addEventListener('click', () => {

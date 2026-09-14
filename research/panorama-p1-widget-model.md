@@ -52,7 +52,7 @@ time. What was never tabulated as a matrix is Overlay × Background and Message 
 |---|---|---|---|
 | **1. State** | Chrome, Content, independent LEDs (select/menu buttons, Play/Record/Loop/Mute/Solo/etc.) | A real, stable "current value" exists on the device. Not sending it leaves it as-is. Idempotent. | Send the new value. |
 | **2. Select-or-clear register** | Status LED strip (CC 99-102, Thirty-fifth finding) | One of N positions active, or none. A genuine clear primitive exists. | Write 127 to the CC for the desired position, or 0 to *any* of the group's CCs to clear all. **Must be sent as clear-then-set as one atomic unit** — diffing per-CC independently breaks it. |
-| **3. Trigger-only, no clear primitive** | Message, popup menu (Overlay layer), popup highlight (CC 111) | No device-tracked "current value" to diff against. Every send is a fresh one-shot "show this now." | **No targeted clear exists.** Only: (a) never send it, or (b) a real Background switch, which resets Background+Content (and, per the z-order finding above, Message — but not a currently-open popup, which needs its own switch too since it's a *different* trigger). The highlight is the same story one level down: confirmed directly (Thirty-seventh finding, protocol notes) that 0/127/255 all leave the last-set row highlighted rather than clearing it — dismissing the *whole popup* is the only way to make a highlight disappear, there's no way to un-highlight a row while leaving the popup open. |
+| **3. Trigger-only, no clear primitive** | Message, popup menu (Overlay layer), popup highlight (CC 111) | No device-tracked "current value" to diff against. Every send is a fresh one-shot "show this now." | **No targeted clear exists.** Only: (a) never send it, or (b) a real Background switch, which resets Background+Content (and, per the z-order finding above, Message — but not a currently-open popup, which needs its own switch too since it's a *different* trigger). The popup highlight is the one **partial exception**, where a targeted clear does exist after all: no *value* on the highlight CC clears it (0/127/255 all leave the last-set row highlighted, Thirty-seventh finding), but **re-sending the popup's own content does** — photographed with the popup still open and the bar gone (Fortieth finding). So `clear_popup_highlight` is a real verb, implemented by repopulating rather than by any "none" value. |
 
 **The correction this document exists to capture**: the simulator's "differential push"
 architecture (diff against last-sent value, resend only on change) implicitly treats
@@ -173,12 +173,16 @@ and not others.
    `hide_popup`) then fully redraws whatever Background was last active, including Chrome.
    Resending the SAME template value was confirmed NOT to count as a real switch on this
    device (Thirty-eighth finding) -- bouncing is required, not optional.
-4. **`show_popup(items)` / `set_popup_highlight(row)` / `hide_popup()`** — same real show/hide
+4. **`show_popup(items)` / `set_popup_highlight(row)` / `clear_popup_highlight()` / `hide_popup()`** — same real show/hide
    pair, independent of `switch_background`'s own target (the popup is always hardcoded to
-   `page_template=0` internally). The highlight has no confirmed clear value of its own (any
-   value tried just moves it to another valid row or is ignored) -- only `hide_popup()` (a full
-   Background restore) removes it.
-5. **`set_led(cc, on)`** — Class 1, independent on/off LEDs.
+   `page_template=0` internally). No *value* on the highlight CC clears it (any value tried
+   either moves it to another valid row or is ignored) -- but `clear_popup_highlight()`
+   achieves it anyway by re-sending the popup's content, confirmed on hardware with the popup
+   left open (Fortieth finding).
+5. **`set_led(led: Led, on)`** — Class 1, one named LED at a time (`Led::Play`,
+   `Led::Select { index }`, ...), named for the control it lights rather than by CC, since
+   every one shares its CC with that control's own button input. Returns `None` for an
+   out-of-range family index rather than addressing an unrelated CC.
 6. **`set_status_led(position: Option<1..=4>)`** — Class 2, already implemented as
    `status_led_messages` (clear-then-set as one unit).
 7. **`set_cursor_volume(0..=1023)`** — the segmented CC 15/47 pair.

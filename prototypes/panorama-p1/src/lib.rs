@@ -259,6 +259,34 @@ impl PadState {
     }
 }
 
+// The per-element types below exist so a Background carries ONE item per
+// physical control, with that control's fields grouped together -- rather
+// than several same-length parallel lists the caller has to keep aligned by
+// index. Same reasoning as splitting a CSV into real fields: the pairing is
+// the semantics.
+
+/// One knob on the `Mixer` background: its label and the value shown under
+/// it. (displayId 6 and 7 respectively, but a caller never sees that.)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Knob {
+    pub name: String,
+    pub value: String,
+}
+
+/// One pad on `PadView`/`PadView3Row`: its label and its own lit state.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Pad {
+    pub name: String,
+    pub state: PadState,
+}
+
+/// One fader on `FaderSplit`, which draws TWO stacked labels per fader.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StackedLabel {
+    pub top: String,
+    pub bottom: String,
+}
+
 /// The Background verb (Axis 1's "Background" layer, paired with its own
 /// Content -- switching a Background always clears Content, so the two
 /// travel together in one call, per the widget-model doc). Each variant's
@@ -276,40 +304,48 @@ impl PadState {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Background {
-    /// 4x2 knob grid (the default page on connect).
-    #[serde(rename_all = "camelCase")]
-    Mixer { param_names: [String; 8], param_values: [String; 8] },
-    /// 8 faders split into two groups of 4; 16 labels, two stacked per fader.
-    FaderSplit { labels: [String; 16] },
-    /// 8 faders in one continuous row.
-    FaderRow { labels: [String; 8] },
-    /// 4x4 pad grid, rows A-D, all 16 pads individually labelable.
-    #[serde(rename_all = "camelCase")]
-    PadView { pad_names: [String; 16], pad_states: [PadState; 16] },
+    /// 4x2 knob grid (the default page on connect). One `Knob` per physical
+    /// knob, so a knob's label travels with its own value instead of the
+    /// caller having to keep two same-length lists in sync by index.
+    Mixer { knobs: [Knob; 8] },
+    /// 8 faders split into two groups of 4, each fader showing TWO stacked
+    /// labels (confirmed: template 18 has 16 name slots, not 8). One
+    /// `StackedLabel` per fader rather than a flat 16-list whose
+    /// index-to-position mapping (0-3 top-left, 4-7 bottom-left, 8-11
+    /// top-right, 12-15 bottom-right) the caller would otherwise have to
+    /// know and get right -- `body_fields` does that mapping now.
+    FaderSplit { faders: [StackedLabel; 8] },
+    /// 8 faders in one continuous row, one label each.
+    FaderRow { fader_labels: [String; 8] },
+    /// 4x4 pad grid, rows A-D. One `Pad` per physical pad, pairing each
+    /// pad's label with its own lit state.
+    PadView { pads: [Pad; 16] },
     /// 3x4 pad grid, rows A-C only -- genuinely distinct from PadView, not
     /// just an unlabeled 4th row (Sixteenth finding).
-    #[serde(rename_all = "camelCase")]
-    PadView3Row { pad_names: [String; 12], pad_states: [PadState; 12] },
-    /// 1 fader + a vertical bulleted list, hard-capped at 5 visible entries.
+    PadView3Row { pads: [Pad; 12] },
+    /// 1 fader + a vertical bulleted list, hard-capped at 5 visible entries
+    /// (confirmed a real widget limit, not under-testing -- so a fixed 5,
+    /// not an open list).
     List { items: [String; 5] },
     /// Plain 2x4 button grid, no fader/knob widgets.
-    Grid { labels: [String; 8] },
+    Grid { buttons: [String; 8] },
     /// `L:`/`R:` locator bars + a 2x4 grid beneath.
     #[serde(rename_all = "camelCase")]
-    TransportLauncher { loop_left: String, loop_right: String, labels: [String; 8] },
+    TransportLauncher { loop_left: String, loop_right: String, buttons: [String; 8] },
     /// Content-area widget never characterized -- only the (template-
     /// independent) bottom menu-button relabeling was ever tested against
     /// this template. Kept as a bare marker, no content fields offered yet.
     Menu,
     /// A list with one row shown highlighted; exact slot count/labeling
     /// scheme not characterized beyond "list-like" (Fifteenth finding) --
-    /// kept as a generic Vec rather than a confirmed fixed size.
+    /// a genuinely open list, so `Vec`, not a fixed array.
     ListHighlighted { items: Vec<String>, highlighted: usize },
     /// 4 scene buttons `S1`-`S4` (+ a "B" indicator whose own field is
     /// unidentified).
-    SceneButtons { labels: [String; 4] },
+    SceneButtons { scenes: [String; 4] },
     /// Up to 8 rows, each paired with a "Pre" label; this covers BOTH
     /// template 8 and 9, which render indistinguishably (Fifteenth finding).
+    /// Open list (the widget's real cap isn't pinned down), so `Vec`.
     BrowserList { items: Vec<String> },
     /// Reset sentinel -- Content writes are a confirmed no-op here.
     Reset,
@@ -361,29 +397,43 @@ impl Background {
     fn body_fields(&self) -> BodyFields {
         let mut f = BodyFields::default();
         match self {
-            Background::Mixer { param_names, param_values } => {
-                f.names = Some(param_names.to_vec());
-                f.values = Some(param_values.to_vec());
+            Background::Mixer { knobs } => {
+                f.names = Some(knobs.iter().map(|k| k.name.clone()).collect());
+                f.values = Some(knobs.iter().map(|k| k.value.clone()).collect());
             }
-            Background::FaderSplit { labels } => f.names = Some(labels.to_vec()),
-            Background::FaderRow { labels } => f.names = Some(labels.to_vec()),
-            Background::Grid { labels } => f.names = Some(labels.to_vec()),
-            Background::PadView { pad_names, pad_states } => {
-                f.names = Some(pad_names.to_vec());
-                f.pad_state = Some(pad_states.iter().map(|s| s.as_byte()).collect());
+            // Template 18's 16 name slots are laid out as two stacked rows
+            // per group of 4 faders: indices 0-3 are the left group's TOP
+            // labels, 4-7 that group's BOTTOM labels, 8-11 the right group's
+            // top, 12-15 its bottom ("Follow-up on template 18" finding).
+            // Callers hand over 8 faders with top/bottom paired; the
+            // scattering into that order happens here, once.
+            Background::FaderSplit { faders } => {
+                let mut names = vec![String::new(); 16];
+                for (i, fader) in faders.iter().enumerate() {
+                    let (top, bottom) = if i < 4 { (i, i + 4) } else { (i + 4, i + 8) };
+                    names[top] = fader.top.clone();
+                    names[bottom] = fader.bottom.clone();
+                }
+                f.names = Some(names);
             }
-            Background::PadView3Row { pad_names, pad_states } => {
-                f.names = Some(pad_names.to_vec());
-                f.pad_state = Some(pad_states.iter().map(|s| s.as_byte()).collect());
+            Background::FaderRow { fader_labels } => f.names = Some(fader_labels.to_vec()),
+            Background::Grid { buttons } => f.names = Some(buttons.to_vec()),
+            Background::PadView { pads } => {
+                f.names = Some(pads.iter().map(|p| p.name.clone()).collect());
+                f.pad_state = Some(pads.iter().map(|p| p.state.as_byte()).collect());
+            }
+            Background::PadView3Row { pads } => {
+                f.names = Some(pads.iter().map(|p| p.name.clone()).collect());
+                f.pad_state = Some(pads.iter().map(|p| p.state.as_byte()).collect());
             }
             Background::List { items } => f.names = Some(items.to_vec()),
-            Background::TransportLauncher { loop_left, loop_right, labels } => {
+            Background::TransportLauncher { loop_left, loop_right, buttons } => {
                 f.page_labels = Some(vec![loop_left.clone(), loop_right.clone()]);
-                f.names = Some(labels.to_vec());
+                f.names = Some(buttons.to_vec());
             }
             Background::Menu | Background::Reset | Background::Blank => {}
             Background::ListHighlighted { items, .. } => f.names = Some(items.clone()),
-            Background::SceneButtons { labels } => f.names = Some(labels.to_vec()),
+            Background::SceneButtons { scenes } => f.names = Some(scenes.to_vec()),
             Background::BrowserList { items } => f.names = Some(items.clone()),
         }
         f
@@ -412,7 +462,9 @@ struct BodyFields {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Header {
-    pub title_bar: Vec<String>,
+    /// Exactly 3 segments -- the real slot count, so the type enforces it
+    /// rather than a caller discovering the truncation at render time.
+    pub title_bar: [String; 3],
     pub big_font: String,
     pub current_value: String,
 }
@@ -426,7 +478,9 @@ pub struct Header {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Footer {
-    pub tabs: Vec<String>,
+    /// Exactly 5 tabs -- the real slot count (callout D in the official
+    /// manual: "Five menu buttons").
+    pub tabs: [String; 5],
 }
 
 /// Tracks what's actually been sent, so `hide_popup`/`hide_message` can
@@ -448,6 +502,10 @@ pub struct DeviceState {
     last_popup_highlight: Option<u8>,
     last_message_text: Option<String>,
     footer: Footer,
+    /// Which individual LEDs are believed lit, by CC (see `set_led`). The
+    /// 4-LED status strip is NOT in here -- it's a one-of-N register with
+    /// its own verb, not independent bits.
+    lit_leds: std::collections::BTreeSet<u8>,
 }
 
 impl Default for DeviceState {
@@ -460,12 +518,13 @@ impl Default for DeviceState {
             last_popup_items: Vec::new(),
             last_popup_highlight: None,
             last_message_text: None,
+            lit_leds: std::collections::BTreeSet::new(),
             footer: Footer {
                 // 5 real (non-empty, so indexed_entries doesn't filter them
                 // out and skip the slot) but visually blank placeholders --
                 // we don't know what a caller wants shown here yet, and
                 // leaving stale text is worse than genuinely blank.
-                tabs: vec![" ".to_string(); 5],
+                tabs: std::array::from_fn(|_| " ".to_string()),
             },
         }
     }
@@ -515,7 +574,7 @@ impl DeviceState {
     /// way to dismiss Message or an open popup, since both get marked
     /// hidden here (a real switch clears them as a side effect, confirmed
     /// -- Thirteenth/Thirty-first findings).
-    pub fn switch_background(&mut self, bg: Background, title_bar: Vec<String>) -> Vec<Vec<u8>> {
+    pub fn switch_background(&mut self, bg: Background, title_bar: [String; 3]) -> Vec<Vec<u8>> {
         let msgs = self.full_redraw(&bg, &title_bar);
         self.last_background = Some(bg);
         self.header.title_bar = title_bar;
@@ -551,7 +610,7 @@ impl DeviceState {
     /// matter beyond being *a* valid one) -- also remembered so every
     /// subsequent `switch_background`/`resend_body` keeps re-asserting it,
     /// instead of leaving it to whatever last wrote that slot.
-    pub fn set_footer(&mut self, tabs: Vec<String>) -> Vec<u8> {
+    pub fn set_footer(&mut self, tabs: [String; 5]) -> Vec<u8> {
         let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
         let msg = write_tabs(t, &tabs);
         self.footer.tabs = tabs;
@@ -577,6 +636,32 @@ impl DeviceState {
         msg
     }
 
+    /// Lights or clears ONE named LED (`Led::Play`, `Led::Select { index: 3 }`,
+    /// ...), rather than the older "hand me the full list of every CC that
+    /// should be lit" resync. Remembered, so `lit_leds()` can report what's on
+    /// without a device read-back (there isn't one).
+    ///
+    /// Returns `None` for an out-of-range family index (e.g. `Select { index: 9 }`)
+    /// -- nothing is sent and nothing is recorded, rather than silently
+    /// addressing some unrelated CC.
+    pub fn set_led(&mut self, led: Led, on: bool) -> Option<[u8; 3]> {
+        let cc = led.cc()?;
+        if on {
+            self.lit_leds.insert(cc);
+        } else {
+            self.lit_leds.remove(&cc);
+        }
+        Some(cc_message(cc, if on { 127 } else { 0 }))
+    }
+
+    /// Every LED currently believed lit, as CC numbers. Software mirror only,
+    /// same as the rest of `DeviceState`.
+    pub fn lit_leds(&self) -> Vec<u8> {
+        let mut v: Vec<u8> = self.lit_leds.iter().copied().collect();
+        v.sort_unstable();
+        v
+    }
+
     /// Records what's already on the real device WITHOUT sending anything --
     /// for a caller that wrote a Background's content through some OTHER
     /// path (e.g. service.rs's raw per-field protocol at boot) and wants
@@ -588,7 +673,7 @@ impl DeviceState {
     /// reported bug ("hiding popup does not really work") when the real
     /// device's boot state was never reflected here. Not a device read-back
     /// (none exists) -- purely "trust the caller, they just wrote this".
-    pub fn seed_background(&mut self, bg: Background, title_bar: Vec<String>) {
+    pub fn seed_background(&mut self, bg: Background, title_bar: [String; 3]) {
         self.last_background = Some(bg);
         self.header.title_bar = title_bar;
         self.popup_visible = false;
@@ -666,6 +751,28 @@ impl DeviceState {
     pub fn set_popup_highlight(&mut self, row: u8) -> [u8; 3] {
         self.last_popup_highlight = Some(row);
         cc_message(CC_MENU_HIGHLIGHT, row)
+    }
+
+    /// Un-highlights every row while leaving the popup open. **CONFIRMED
+    /// WORKING on hardware** (Fortieth finding, photographed): re-sending
+    /// the popup's own content clears the highlight bar outright, with the
+    /// popup's items still showing and untouched.
+    ///
+    /// This corrects the Thirty-seventh finding's conclusion. That one
+    /// established -- correctly -- that the highlight CC itself has no clear
+    /// value: 0, 127 and 255 were each sent to a popup showing a highlighted
+    /// row and photographed, and every one left the highlight exactly where
+    /// it was, because the CC only accepts in-range rows. The wrong part was
+    /// the inference drawn from it, that dismissing the whole popup was
+    /// therefore the ONLY way to lose the bar. Repopulating does it too.
+    ///
+    /// Returns an empty vec if no popup is showing (nothing to clear).
+    pub fn clear_popup_highlight(&mut self) -> Vec<Vec<u8>> {
+        if !self.popup_visible {
+            return Vec::new();
+        }
+        self.last_popup_highlight = None;
+        vec![write_page_menu(&self.last_popup_items)]
     }
 
     /// No-op (empty message vec) if already hidden or nothing to restore to
@@ -877,6 +984,62 @@ pub fn led_cc_messages(on: &[u8]) -> Vec<[u8; 3]> {
     LED_CCS.iter().map(|&cc| cc_message(cc, if on.contains(&cc) { 127 } else { 0 })).collect()
 }
 
+/// One individually-addressable LED, named for the control it lights rather
+/// than by CC number -- the same "semantically what it IS on the hardware"
+/// rule the input side uses, so `Led::Play` instead of `84`. Every one of
+/// these shares its CC with that control's own button input (the confirmed
+/// "one CC for input and LED" pattern), which is exactly why the names
+/// match `cc_name`'s.
+///
+/// Deliberately NOT including the 4-LED status strip: that's one
+/// one-of-N register, not four independent bits (confirmed hardware mutex,
+/// Thirty-fifth finding), so it keeps its own verb (`set_status_led`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "led", rename_all = "camelCase")]
+pub enum Led {
+    /// `select_1`..`select_8` (CC 16-23), the 8 LED buttons under the faders.
+    Select { index: u8 },
+    /// `screen_button_0`..`screen_button_4` (CC 106-110), the row under the display.
+    ScreenButton { index: u8 },
+    Loop,
+    Play,
+    Record,
+    Mute,
+    Solo,
+    /// CC 29. CONFIRMED on hardware to produce no visible effect when toggled --
+    /// kept addressable rather than hidden, since "nothing lights up" is itself
+    /// the finding, not a reason to pretend the CC doesn't exist.
+    AutomationWrite,
+    /// CC 25 -- a real `sendChannelController` call site (tied to menuButtonLabel
+    /// text) but never characterized as an actual LED. A live-testable candidate,
+    /// not a confirmed light.
+    Cc25Uncharacterized,
+}
+
+impl Led {
+    /// The CC this LED lives on, or `None` if an index is out of range for
+    /// its family (Select is 1-8, ScreenButton is 0-4).
+    pub fn cc(&self) -> Option<u8> {
+        match self {
+            Led::Select { index } => (1..=8).contains(index).then(|| 16 + index - 1),
+            Led::ScreenButton { index } => (*index <= 4).then(|| 106 + index),
+            Led::Loop => Some(80),
+            Led::Play => Some(84),
+            Led::Record => Some(85),
+            Led::Mute => Some(30),
+            Led::Solo => Some(31),
+            Led::AutomationWrite => Some(29),
+            Led::Cc25Uncharacterized => Some(25),
+        }
+    }
+
+    /// The matching input-control name from `cc_name`, so an LED and the
+    /// button it lights are recognisably the same thing.
+    pub fn control_name(&self) -> Option<String> {
+        self.cc().map(cc_name)
+    }
+}
+
 // cursorTrack.getVolume() feedback -- NOT a simple on/off LED, unlike every
 // entry in LED_CCS above. Confirmed from source (Thirty-third finding):
 // `cursorTrack.getVolume().addValueObserver(1024, function(a){var b=a&7;
@@ -956,13 +1119,20 @@ pub fn cc_name(cc: u8) -> String {
         83 => "stop".to_string(),    // transport.stop() / transport.setPosition(0)
         84 => "play".to_string(),    // transport.play()
         85 => "record".to_string(),  // transport.record()
-        86 => "loop_in".to_string(), // transport.getInPosition().set(...)
-        87 => "loop_out".to_string(), // transport.getOutPosition().set(...)
+        // F1/F2 in the transport grid. Silkscreened as the rewind/forward symbols with an
+        // added vertical bar (|◄◄ and ►►|) -- the conventional "seek to previous / seek to
+        // next" marker, which is what they're named for here. The Bitwig driver's own
+        // getInPosition()/getOutPosition() calls (previously the basis for "loop_in"/
+        // "loop_out") are a DAW-side reassignment of these same two buttons, same
+        // hardware-identity-vs-DAW-semantic split as CC 90 -- citation kept, name is the
+        // hardware one.
+        86 => "seek_prev".to_string(), // Bitwig driver reassigns to transport.getInPosition().set(...)
+        87 => "seek_next".to_string(), // Bitwig driver reassigns to transport.getOutPosition().set(...)
         89 => "click".to_string(), // transport.toggleClick()/toggleMetronomeTicks()
         // 88, 90, 93-95, 97-98, 100-102, 104-105: resolved from a fuller re-grep of PANORAMA_P1.control.js
         // ("Thirty-third finding" in the protocol notes) -- the earlier pass's case-body grep missed these
         // because they span more of the minified line than that grep searched.
-        88 => "undo_redo".to_string(), // Shift-gated: shift=application.redo(), plain=application.undo()
+        88 => "undo".to_string(), // silkscreened "Undo" (F3); Bitwig driver makes it Shift-gated: shift=application.redo(), plain=application.undo()
         // CORRECTED (Thirty-ninth finding): reported directly ("mode -> f-key, and so on"),
         // then confirmed with a deliberate two-button live test + webcam photo taken the
         // instant each CC arrived. Pressing the physical button silkscreened "Mode" (bottom-
@@ -999,27 +1169,21 @@ pub fn cc_name(cc: u8) -> String {
         // with its own live press + photo the way 90/99/103 just were.
         91 => "track_minus".to_string(),
         92 => "track_plus".to_string(),
-        // RETRACTED (Thirty-ninth finding): this was labeled "f_keys" on the theory that
-        // pressing it opened a device-native F-Keys page -- but a deliberate, photographed
-        // live test of the REAL physical F-Keys button (top-left of the transport grid)
-        // produced CC 103, never CC 99. The device-native-page-switch behavior itself was real
-        // and reproducible when this was first found -- only the attribution to "F-Keys"
-        // specifically is now known wrong.
+        // The four status-strip CCs, named as ONE 0-indexed family matching STATUS_LED_CCS
+        // below (99-102, CONFIRMED as a single one-of-N register on hardware, "Thirty-fifth
+        // finding"). Same "one CC for input and LED" pattern as every other on/off control
+        // here, so the input identity is simply the same strip position as the LED.
         //
-        // A real lead, found elsewhere in THIS SAME file rather than guessed fresh: CC 99 is
-        // also one of the four CONFIRMED status-LED-strip CCs (99-102, "Thirty-fifth finding",
-        // see STATUS_LED_CCS below) -- Status1, leftmost of the strip above the screen. Per the
-        // "one CC for input and LED" pattern already established for every other on/off button
-        // on this device (select_N, menu_button_0/screen_button_N, etc.), CC 99 as an INPUT is
-        // most likely whatever physical action lights that same Status1 LED position, not a
-        // transport-grid button at all -- not yet isolated which physical control that is.
-        99 => "status_led_1_or_unconfirmed".to_string(),
-        // 100-102, 104: all resolved as browser/patch-menu "cancel"-shaped handlers (gBrowserOpen=false,
-        // setActiveDisplayPage/SurfaceStatus changes) but not individually distinguished as specific
-        // physical buttons yet -- kept generic and source-quoted rather than over-claiming a name.
-        100 => "browser_cancel_1".to_string(), // gBrowserOpen=false; shift: application.createInstrumentTrack(-1)
-        101 => "browser_cancel_2".to_string(), // gBrowserOpen=false; setActiveDisplayPage + nek_set_nektarine_instance_active(0)
-        102 => "browser_cancel_3".to_string(), // gBrowserOpen=false; softTakeoverReset(); setActiveDisplayPage(internalPage)
+        // This replaces two separate wrong guesses: CC 99 was briefly "f_keys" (retracted in
+        // the Thirty-ninth finding -- the real F-Keys button is CC 103, confirmed by
+        // photographed live press), and 100-102 were "browser_cancel_1/2/3" after the Bitwig
+        // driver's handlers for them (gBrowserOpen=false / setActiveDisplayPage /
+        // softTakeoverReset) -- DAW-side reassignments of these positions, not their hardware
+        // identity, same split as CC 90. Citations kept per-line.
+        99 => "status_led_0".to_string(),
+        100 => "status_led_1".to_string(), // Bitwig: gBrowserOpen=false; shift: application.createInstrumentTrack(-1)
+        101 => "status_led_2".to_string(), // Bitwig: gBrowserOpen=false; setActiveDisplayPage + nek_set_nektarine_instance_active(0)
+        102 => "status_led_3".to_string(), // Bitwig: gBrowserOpen=false; softTakeoverReset(); setActiveDisplayPage(internalPage)
         104 => "surface_status".to_string(), // SurfaceStatus/SURFACE.connected-state related -- plausibly not a normal user button, not yet confirmed live
         105 => "automation_write".to_string(), // transport.toggleWriteArrangerAutomation(), unconditional (unlike CC 90's Shift-gated version) -- likely the button whose LED is CC 29
         // Confirmed from PANORAMA_P1.control.js's onMidi CC dispatch (Z811481AF53E7994F1),
@@ -1029,8 +1193,8 @@ pub fn cc_name(cc: u8) -> String {
         // jog wheel's push/click as previously guessed. Distinct from CC 30, which directly toggles
         // cursorTrack's mute AND drives its own LED -- CC 97 is plausibly a pad/drum-mode mute-select
         // button instead, not yet confirmed live which physical control this is.
-        97 => "toggle_mute_pressed".to_string(),
-        98 => "toggle_view_pressed".to_string(), // source: TOGGLE_VIEW_PRESSED=0<e; onToggleView() on press
+        97 => "toggle_mute".to_string(),
+        98 => "toggle_view".to_string(), // source: TOGGLE_VIEW_PRESSED=0<e; onToggleView() on press
         // CORRECTED (Thirty-ninth finding): confirmed live with a deliberate press + webcam
         // photo taken the instant the CC arrived -- the finger was clearly on the physical
         // "F-Keys" button (top-left of the transport grid, its own dedicated SHIFT per the
@@ -1282,7 +1446,7 @@ mod tests {
     /// NONE at all (`Menu`) -- the latter previously sent title_bar alone.
     #[test]
     fn switch_background_omits_body_fields_a_variant_doesnt_define() {
-        let title_bar = vec!["T1".to_string(), "T2".to_string(), "T3".to_string()];
+        let title_bar: [String; 3] = ["T1".into(), "T2".into(), "T3".into()];
 
         // Mixer defines names+values only (no pad_state/page_labels) --
         // title_bar + 2, not title_bar + all 4. Nullable per BodyFields'
@@ -1290,8 +1454,7 @@ mod tests {
         // template switch auto-clears ctrl_element_name (protocol.json,
         // confirmed) and the rest are assumed the same by analogy.
         let mixer = Background::Mixer {
-            param_names: std::array::from_fn(|i| format!("N{i}")),
-            param_values: std::array::from_fn(|i| format!("V{i}")),
+            knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
         };
         assert_eq!(switch_background_messages(&mixer, &title_bar).len(), 3, "title_bar + names + values only");
 
@@ -1304,8 +1467,7 @@ mod tests {
         // different 2-of-4 subset, confirming this isn't hardcoded to
         // Mixer's particular pair.
         let pad_view = Background::PadView {
-            pad_names: std::array::from_fn(|i| format!("P{i}")),
-            pad_states: [PadState::Default; 16],
+            pads: std::array::from_fn(|i| Pad { name: format!("P{i}"), state: PadState::Default }),
         };
         assert_eq!(switch_background_messages(&pad_view, &title_bar).len(), 3, "title_bar + names + pad_state only");
     }
@@ -1320,10 +1482,9 @@ mod tests {
     fn show_and_hide_overlay_verbs_resend_the_full_body_state() {
         let mut state = DeviceState::default();
         let bg = Background::Mixer {
-            param_names: std::array::from_fn(|i| format!("N{i}")),
-            param_values: std::array::from_fn(|i| format!("V{i}")),
+            knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
         };
-        state.switch_background(bg, vec!["T1".into(), "T2".into(), "T3".into()]);
+        state.switch_background(bg, ["T1".to_string(), "T2".to_string(), "T3".to_string()]);
 
         // resend_body() bounces through a different template first (see its
         // doc comment) via full_redraw, which is: switch_background_messages
@@ -1354,7 +1515,7 @@ mod tests {
     #[test]
     fn resend_body_bounce_target_never_matches_the_real_background() {
         let mut state = DeviceState::default();
-        state.switch_background(Background::Blank, vec!["T1".into(), "T2".into(), "T3".into()]);
+        state.switch_background(Background::Blank, ["T1".to_string(), "T2".to_string(), "T3".to_string()]);
         state.show_popup(&["A".to_string()]);
         let msgs = state.hide_popup();
         // First message is the bounce's title_bar write -- byte index 7 is
@@ -1378,10 +1539,9 @@ mod tests {
     fn switch_background_and_resend_body_both_include_a_real_tabs_write() {
         let mut state = DeviceState::default();
         let bg = Background::Mixer {
-            param_names: std::array::from_fn(|i| format!("N{i}")),
-            param_values: std::array::from_fn(|i| format!("V{i}")),
+            knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
         };
-        let switch_msgs = state.switch_background(bg, vec!["T1".into(), "T2".into(), "T3".into()]);
+        let switch_msgs = state.switch_background(bg, ["T1".to_string(), "T2".to_string(), "T3".to_string()]);
         // full_redraw appends tabs/bigfont/current_value in that order after
         // switch_background_messages' own writes -- tabs is no longer
         // necessarily last (current_value is), so find it by displayId.
@@ -1534,6 +1694,59 @@ mod tests {
         assert_eq!(json["fader_1"]["value"], 42);
         assert_eq!(json["fader_1"]["lastEvent"]["kind"], "Fader");
         assert!(json.get("controls").is_none());
+    }
+
+    /// `Led` names the control it lights, and must land on that control's
+    /// own CC -- the confirmed "one CC for input and LED" pattern. Also
+    /// checks the out-of-range guard returns None instead of addressing
+    /// some unrelated CC.
+    #[test]
+    fn led_identity_maps_to_the_same_cc_as_its_input_control() {
+        assert_eq!(Led::Play.cc(), Some(84));
+        assert_eq!(Led::Play.control_name().as_deref(), Some("play"));
+        assert_eq!(Led::Select { index: 1 }.cc(), Some(16));
+        assert_eq!(Led::Select { index: 8 }.cc(), Some(23));
+        assert_eq!(Led::Select { index: 1 }.control_name().as_deref(), Some("select_1"));
+        assert_eq!(Led::ScreenButton { index: 0 }.cc(), Some(106));
+        assert_eq!(Led::ScreenButton { index: 4 }.cc(), Some(110));
+        assert_eq!(Led::ScreenButton { index: 4 }.control_name().as_deref(), Some("screen_button_4_enter"));
+
+        // Out of range for the family -> no CC, so set_led sends nothing.
+        assert_eq!(Led::Select { index: 0 }.cc(), None);
+        assert_eq!(Led::Select { index: 9 }.cc(), None);
+        assert_eq!(Led::ScreenButton { index: 5 }.cc(), None);
+
+        let mut state = DeviceState::default();
+        assert!(state.set_led(Led::Play, true).is_some());
+        assert_eq!(state.lit_leds(), vec![84]);
+        assert!(state.set_led(Led::Select { index: 2 }, true).is_some());
+        assert_eq!(state.lit_leds(), vec![17, 84]);
+        assert!(state.set_led(Led::Play, false).is_some());
+        assert_eq!(state.lit_leds(), vec![17]);
+        assert!(state.set_led(Led::Select { index: 99 }, true).is_none(), "bad index sends nothing");
+        assert_eq!(state.lit_leds(), vec![17], "and records nothing");
+    }
+
+    /// FaderSplit takes 8 faders with top/bottom paired, but template 18's
+    /// wire layout wants them scattered: 0-3 left-group tops, 4-7 left
+    /// bottoms, 8-11 right tops, 12-15 right bottoms. That mapping is
+    /// exactly the kind of thing that breaks silently, so pin it.
+    #[test]
+    fn fader_split_scatters_paired_labels_into_template_18_slot_order() {
+        let bg = Background::FaderSplit {
+            faders: std::array::from_fn(|i| StackedLabel {
+                top: format!("T{i}"),
+                bottom: format!("B{i}"),
+            }),
+        };
+        let names = bg.body_fields().names.expect("FaderSplit defines names");
+        assert_eq!(names.len(), 16);
+        // Left group (faders 0-3): tops at 0-3, bottoms at 4-7.
+        assert_eq!(&names[0..4], &["T0", "T1", "T2", "T3"]);
+        assert_eq!(&names[4..8], &["B0", "B1", "B2", "B3"]);
+        // Right group (faders 4-7): tops at 8-11, bottoms at 12-15.
+        assert_eq!(&names[8..12], &["T4", "T5", "T6", "T7"]);
+        assert_eq!(&names[12..16], &["B4", "B5", "B6", "B7"]);
     }
 
     #[test]
