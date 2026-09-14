@@ -804,6 +804,35 @@ remaining ops (create_page / attach / geometry / widget-type enum / the bind
 hash), or stand up the VM capture. The VM capture is the higher-confidence path
 now that VIP static analysis is closed.
 
+## Twentieth — widgets are script-backed; the no-Lua path does not exist
+
+The widget module (0x8062xxx, all 17 widget-table references live here) shows the
+widget struct embeds a script context: destroy_widget (0x080629B0) frees it via
+the script module (0x08065108) at widget+4, and the render accessors invoke the
+script to draw. struct+0x31 is a FLAGS byte (bits set/cleared), not a
+self-drawing type enum; struct+0x30 is the valid flag.
+
+So there is no "filled-rect widget type that self-draws its colour" -- every
+widget draws through a bound Lua script, and binding is the hash-keyed op 0x3a.
+The default 0xFFFF0000 colour is just a field a script would read.
+
+### Conclusion of the static-firmware effort
+
+Drawing our own pixels requires the complete VIP recipe -- create_page,
+create_widget, create_slot + load a draw script, hash-bind the widget to the
+script, set geometry, attach to the active page, show -- and it is all-or-nothing:
+the panel shows nothing until every step is correct, so the camera gives no
+partial signal to reverse the argument layouts by experiment. The one step that
+resists static reversing is the name-hash binding (op 0x3a, Jenkins 0xFEEDBEF3),
+whose expected key we cannot derive from the firmware alone.
+
+The static observable artifacts (ARM firmware, on-device probing, camera) are now
+substantially exhausted for this purpose. The remaining observable artifact that
+WOULD yield the exact recipe is VIP's RUNTIME traffic -- captured in a Windows VM
+with the real iLok authorization, device passed through, usbmon on the Linux host.
+That is the recommended path; the per-10-min firmware loop was stopped here as it
+had reached a firm negative.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
