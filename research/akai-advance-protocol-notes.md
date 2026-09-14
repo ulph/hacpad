@@ -166,6 +166,110 @@ volume, then time how long a trailing Device Inquiry takes to come back.
 - Under the flood: are bytes still moving on the wire (queue backlog) or has the
   parser stopped consuming (choke)? Needs `usbmon` during the flood.
 
+## Seventh — the device runs Lua and has a real drawing API
+
+From the official firmware updater (`Akai Professional ADVANCE Firmware Updater
+1.0.10.dmg`), unpacked on Linux by parsing the UDIF container directly — no
+`7z`/`dmg2img`/`binwalk` on this box, so `scratchpad/udif.py` reassembles the
+zlib chunk map, and `scratchpad/unhex.py` decodes what it finds.
+
+**Firmware is shipped as Intel HEX wrapped in SysEx:**
+
+```
+F0 47 00 2E 70 :020000040804ee\r\n:10000000...  F7
+      │  │  └─ command 0x70
+      │  └─ model 0x2E  (note: our Advance 25 reports family 0x2F — unexplained)
+      └─ device 0x00
+```
+
+Two images, decoded with zero bad records:
+
+| Image | Load address | Size | Contents |
+|---|---|---|---|
+| `fw_08040000.bin` | `0x08040000` | 768 KB | ARM Cortex-M code |
+| `fw_08100000.bin` | `0x08100000` | 4 MB | assets — PNGs, fonts, Lua scripts |
+
+The first record decodes to a textbook Cortex-M vector table: initial SP
+`0x20020000`, reset vector `0x08072EF1` (odd = Thumb). A validity magic
+`0x12345678` sits at `0x080FFFFC`. `post_dma2d_queue_empty` in the code image
+points at STM32 DMA2D (Chrom-ART), so this is an STM32F4/F7-class part with
+hardware 2D blitting.
+
+### There is a Lua interpreter on the device
+
+Lua 5.2, with the full standard library (`gsub`, `gmatch`, `sort`, metamethods,
+`precompiled chunk` support — so it accepts bytecode as well as source).
+Alongside it: **LodePNG** (decoder *and* encoder strings) and **FreeType**.
+
+The firmware registers this API into the Lua state — read directly from the
+name table at `0x080ADA78`–`0x080ADCA0`:
+
+| Group | Functions |
+|---|---|
+| Drawing | `draw_rect`, `draw_image`, `draw_text`, `draw_system_text`, `decode_image` |
+| Widgets | `lua_widget_make_dirty`, `post_page_draw`, `asset_get_valid` |
+| LEDs | `led_control_set_level`, `led_control_set_level_midi` |
+| Events | `set_hook_enabled`, `note_generated`, `get_byte` |
+| Loader | `lua_ifc_load_script` |
+| Diagnostics | `mem_usage`, `clear_errors`, `lua_debug` |
+
+`draw_text` takes a table with `color`, `font`, `font_size`, `just_hor`,
+`just_ver`, `padding_hor`, `padding_ver`, `bk_color`, `border_color`,
+`border_width_{left,top,right,bottom}`, `text_data` — a styled-text widget, not a
+fixed label slot.
+
+### A complete working script ships in the asset region
+
+At `0x0810E979` there is a readable Lua widget (a note-visualiser), reproduced in
+full in the scratchpad. The important parts:
+
+```lua
+MAX_W = 480
+MAX_H = 140
+
+function draw_note_rain (args)
+  draw_rect(0, prev_line-PAST_ERASE_PX, MAX_W, PAST_ERASE_PX-SPEED_PX, 0x20000000)
+  draw_rect(0, prev_line, MAX_W, SPEED_PX, 0xff000000)
+  ...
+  lua_widget_make_dirty (WID)
+end
+
+function draw (args) draw_note_rain(args) end
+function note (args)
+  note_status[get_byte(args,1)] = get_byte(args,2)
+end
+set_hook_enabled(2,1); -- Enable note hook
+```
+
+So: `draw_rect(x, y, w, h, argb)` with **real alpha** (`0x20000000` is used as a
+fade-erase), a widget dirty/invalidate model, and an event-hook system with
+per-hook enable. The drawing area here is 480x140 — that is a widget region, not
+proven to be the whole panel.
+
+**This is the answer to "do we get free-form control of the display": the
+hardware and stock firmware plainly support it.** That is a much stronger
+position than the P1, where the screen was a fixed set of addressable text slots.
+
+### What is NOT yet established
+
+The open question is now precise, and it is a tier question:
+
+- Scripts and assets live in the `0x08100000` region. The string
+  `Assets missing. Run Firmware Update Mode.` indicates that region is written
+  through the same update path as the code — i.e. a persistent flash write.
+- **Unknown: whether `lua_ifc_load_script` is reachable at runtime over SysEx.**
+  If it is, we can push a widget without flashing anything and free-form drawing
+  is available at tier 1. If it is not, installing our own widget means writing
+  the asset region, which is a persistent modification.
+
+VIP must have *some* runtime protocol, since it updates parameter names and
+values live. Whether that protocol carries arbitrary draw calls or only populates
+resident widgets is the thing to find next.
+
+Note also that the firmware-update command uses model `0x2E` while our Advance 25
+answers Device Inquiry with family `0x2F`. Not yet explained; do not assume the
+two are interchangeable.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:

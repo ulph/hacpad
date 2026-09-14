@@ -169,6 +169,43 @@ Controller runtime
    └─ receive reactive updates
 ```
 
+## Bridge tiers
+
+Every device bridge is built at one of two tiers, and the tier is a property of
+the bridge, recorded per device.
+
+**Tier 1 — stock firmware.** The device runs the firmware it shipped with. The
+bridge speaks the protocol the device already exposes, whatever that turns out to
+be, and is limited to the capabilities the vendor's firmware offers. This is the
+default and the target for every device.
+
+**Tier 2 — modified firmware.** The device's firmware is patched or replaced to
+expose capabilities the stock protocol does not. A fallback, never a starting
+point.
+
+Tier 1 is strongly preferred, and not merely out of caution:
+
+- it is reversible, and cannot brick a unit
+- it works on any unit, including hardware hacpad's author does not own, so a
+  bridge written once is usable by anyone with the same controller
+- it does not depend on tracking vendor firmware revisions
+
+Tier 2 gives up all three. A tier-2 bridge is per-unit, needs a flashing step
+before it works at all, and re-breaks whenever the vendor ships an update. It is
+justified only when a device's stock protocol genuinely cannot express what the
+bridge needs and the device is otherwise a dead end.
+
+### Reading firmware is tier 1
+
+Disassembling a vendor firmware image to learn the protocol is a **tier-1**
+activity. The image is being read as documentation — the authoritative
+description of the stock protocol the device already speaks — and nothing is
+written back to the device. It usually beats blind protocol fuzzing: the SysEx
+dispatch table in the image enumerates the real command set directly, where
+fuzzing can only sample it and can never prove a command absent.
+
+The tier boundary is writing to the device, not reading the vendor's files.
+
 ## Hardware communication
 Hardware integration can come from either:
 - **Host-level SDK**: the preferred path when the DAW exposes controller hardware integration directly.
