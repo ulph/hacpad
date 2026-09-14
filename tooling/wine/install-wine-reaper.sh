@@ -45,15 +45,36 @@ else
 
     say "Adding the WineHQ repository"
     # Ubuntu's packaged Wine lags badly; use WineHQ's own builds.
+    #
+    # The key must be a *dearmored* binary keyring with a .gpg extension: apt
+    # 2.9+ rejects a keyring file whose extension it doesn't recognise (the
+    # "unsupported filetype" error) and then treats the repo as unsigned. We
+    # also write our own .sources rather than fetching WineHQ's, so Signed-By
+    # points at exactly the keyring we created.
+    command -v gpg >/dev/null || die "gpg not found; needed to dearmor the WineHQ key."
     sudo mkdir -pm755 /etc/apt/keyrings
-    sudo wget -q -O /etc/apt/keyrings/winehq-archive.key \
-        https://dl.winehq.org/wine-builds/winehq.key
-    SOURCES_URL="https://dl.winehq.org/wine-builds/ubuntu/dists/${CODENAME}/winehq-${CODENAME}.sources"
-    if ! wget -q --spider "$SOURCES_URL"; then
+
+    KEYRING=/etc/apt/keyrings/winehq-archive-keyring.gpg
+    sudo rm -f /etc/apt/keyrings/winehq-archive.key   # remove any bad prior attempt
+    wget -q -O- https://dl.winehq.org/wine-builds/winehq.key \
+        | sudo gpg --dearmor -o "$KEYRING" \
+        || die "Failed to fetch or dearmor the WineHQ signing key."
+
+    # Confirm WineHQ actually publishes this codename before writing the source.
+    if ! wget -q --spider "https://dl.winehq.org/wine-builds/ubuntu/dists/${CODENAME}/InRelease"; then
         die "WineHQ has no build for '${CODENAME}'. Set CODENAME to the nearest LTS
        (e.g. CODENAME=noble) and re-run, or install wine from Ubuntu's repo."
     fi
-    sudo wget -q -NP /etc/apt/sources.list.d/ "$SOURCES_URL"
+
+    sudo rm -f /etc/apt/sources.list.d/winehq-*.sources
+    sudo tee /etc/apt/sources.list.d/winehq.sources >/dev/null <<SRC
+Types: deb
+URIs: https://dl.winehq.org/wine-builds/ubuntu
+Suites: ${CODENAME}
+Components: main
+Architectures: amd64 i386
+Signed-By: ${KEYRING}
+SRC
 
     say "Installing wine + winetricks (this pulls a lot)"
     sudo apt-get update
