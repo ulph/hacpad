@@ -659,6 +659,33 @@ Fallback if the firmware side stalls: disassemble VIP_x64.dll (x86-64, in the
 Wine prefix) around its "created all hardware pages" / "Too many widgets" strings
 to read the exact op sequence VIP emits.
 
+## Fifteenth — the widget system: create (0x00) and configure (0x2f)
+
+- **op 0x00 = create_widget(id, type, arg)** (want 4). Worker 0x0806255C:
+  malloc a 52-byte struct into widget table 0x2000EF54[id]; sets a type byte
+  and a default colour field to 0xFFFF0000 (opaque red); geometry fields
+  (offsets 8, 0xC) start zero, so a freshly-created widget has zero size and
+  draws nothing. Also sets struct[0x30]=1, struct[0x31]=type. Does NOT attach to
+  a page or bind a script by itself.
+- **op 0x2f = configure_widget** (want 26). Worker reads id then TWELVE more
+  2-byte (14-bit) values into the struct — matching the draw_text style table
+  (color, font, size, just_hor/ver, padding_hor/ver, bk_color, border color +
+  4 widths). So this is the full per-widget style/geometry setter.
+
+Getting our rect visible is therefore a multi-op recipe: create_widget (0x00) ->
+configure geometry/colour (0x2f or a sibling) -> attach widget to a page ->
+set_active_page (0x10, done) -> the compositor calls the widget's draw. Two ops
+still unpinned: page-create and widget->page attach.
+
+Decision: the firmware widget system is a web of interlocking ops/structs; the
+efficient way to get the exact sequence and argument layout is to disassemble
+VIP_x64.dll (x86-64 PE in the Wine prefix, 29 MB) around its "created all
+hardware pages" / "Too many widgets created on device" strings, which are present
+at 0xC4BB58 / 0xC4CAE0. That is the next step.
+
+Camera-verified so far this session: set_active_page works (panel leaves the
+SETUP page). Not yet drawing our own pixels.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
