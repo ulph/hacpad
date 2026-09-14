@@ -633,6 +633,32 @@ Open lifecycle gap: which op sets slot->state (allocates the Lua VM). create_slo
 leaves it null, yet the loads ACK — so either a state is lazily created, or the
 ACK (hard-coded 0x40) is hiding a 0x4D. To be resolved with the page work.
 
+## Fourteenth — op 0x10 = set active page (camera-verified)
+
+`send_op.rs` is the interactive workbench: it sends any cmd-2 op with a raw
+payload, paced and liveness-checked, and prints replies.
+
+op 0x10 (want 1) has the simplest possible worker (0x08063BC4):
+`str r0, [0x200011D0]` — it stores one byte into a global. Sending
+`op 0x10 = 01` switched the panel OFF the standalone SETUP/DAW-select page to a
+blank page (confirmed by webcam). Reply echoes the value:
+`F0 47 00 2F 02 3D 00 04 04 01 10 40 F7`.
+
+So op 0x10 is **set_active_page(n)** and 0x200011D0 is the active-page global. This
+is the compositor lever we needed: we can take the display away from the native
+SETUP page that was clobbering our draws.
+
+Still no red rect: with a blank page active, re-loading the draw_rect script (slot
+100) leaves the panel blank/black, not red. Loading + running the chunk is not
+enough — slot 100 is not a WIDGET on the active page, so the compositor never
+calls its draw(). The remaining link is create-widget: bind script slot 100 to a
+widget on the active page with a region. op 0x00 (worker 0x0806255C, a
+create-returning-handle taking id + 2 bytes) is the create candidate.
+
+Fallback if the firmware side stalls: disassemble VIP_x64.dll (x86-64, in the
+Wine prefix) around its "created all hardware pages" / "Too many widgets" strings
+to read the exact op sequence VIP emits.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
