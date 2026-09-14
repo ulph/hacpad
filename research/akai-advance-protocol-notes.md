@@ -770,6 +770,40 @@ widget ops (create_page -> create_widget(type=rect) -> set geometry -> attach ->
 show) with no script at all. Next: find the widget-draw dispatch (reads
 struct+0x31, switches on type) to learn the type enum and which type fills.
 
+## Nineteenth — draw_rect is widget-context-only; no flush/hijack shortcut exists
+
+The Lua draw_rect C function (0x0805342C, from the luaL_Reg table at 0x08053758)
+reads its 5 args, then calls the widget-context resolver 0x08066480 (the same one
+op 0x3a's bind uses) and computes every coordinate relative to the CURRENT
+widget's draw origin (globals 0x2000F364 / 0x2000F368, set only during widget
+composition). Called outside a widget's draw() -- e.g. from a top-level chunk we
+load -- there is no valid current widget, so the draw lands nowhere.
+
+This closes the last hoped-for shortcut: there is no "draw then flush" and no way
+to paint without a widget. A visible rect strictly requires a real widget on the
+active page that the firmware composites. Combined with the Eighteenth finding
+(standalone pages are native, Lua dormant), the ONLY way to pixels is to
+replicate VIP's full create recipe: create_page, create_widget, set geometry,
+bind/point at content, attach to page, set_active_page.
+
+### Strategic state (honest)
+
+- VIP holds the recipe but is PACE-encrypted (Seventeenth) -> unreadable.
+- The firmware has all the ops but the recipe is all-or-nothing: nothing shows on
+  the panel until the ENTIRE chain (page+widget+geometry+attach+content+show) is
+  correct, so the camera gives no incremental feedback to reverse args by
+  experiment. That makes blind firmware reversing of the arg layouts slow and
+  uncertain.
+- The reliable route to the exact sequence is to CAPTURE VIP driving the device:
+  a Windows VM with the user's real iLok/VIP authorization, device passed
+  through, and usbmon capturing on the Linux host. Heavy setup but definitive --
+  it hands over the precise op order and argument layout in one session.
+
+Recommendation: either commit to a methodical firmware-reversing grind of the
+remaining ops (create_page / attach / geometry / widget-type enum / the bind
+hash), or stand up the VM capture. The VM capture is the higher-confidence path
+now that VIP static analysis is closed.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
