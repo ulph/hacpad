@@ -741,6 +741,35 @@ Wine, and its code won't disassemble. Unpacking PACE is a DRM-defeat last resort
 we are not taking. The recipe must come from observable artifacts: the ARM
 firmware (readable), on-device probing, and the camera.
 
+## Eighteenth — the page map, and why the Lua-hijack fails
+
+Cycling set_active_page (op 0x10) 0-11 and photographing each (montage saved)
+maps the firmware's built-in standalone pages:
+
+| page | content |
+|---|---|
+| 0 | SETUP / DAW select (Ableton, FL, Reaper, Studio One, MPC) |
+| 1 | BLANK |
+| 2,3 | knob views (8 rotary encoders, e.g. "Logic Pro X", CC values) |
+| 4,5 | pad views (coloured pad grid) |
+| 6,7 | button views |
+| 8-11 | GLOBAL settings (channel, brightness, tempo, save/factory-reset...) |
+
+Attempted hijack: set page 2 active, then redefined draw() in script slots 0..31
+with a full-screen red fill via op 0x3B. **Page 2 stayed green** — no effect.
+
+Conclusion: the standalone pages are rendered by native firmware code, not by Lua
+widgets. The Lua widget system is dormant in standalone mode; VIP is what creates
+the pages/widgets/scripts that use it. So there is no shortcut by hijacking an
+existing page — drawing our own pixels requires replicating VIP's create recipe.
+
+Encouraging detail for a no-Lua path: op 0x00 create_widget defaults the widget
+colour field to 0xFFFF0000 (red) and stores a type byte at struct+0x31. If a
+widget TYPE self-draws as a filled rect in its colour, the recipe could be pure
+widget ops (create_page -> create_widget(type=rect) -> set geometry -> attach ->
+show) with no script at all. Next: find the widget-draw dispatch (reads
+struct+0x31, switches on type) to learn the type enum and which type fills.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
