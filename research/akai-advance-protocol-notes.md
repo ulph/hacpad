@@ -536,6 +536,66 @@ Loading a script is cmd 2 op `0x3B`. Its payload is
 scheme. **That packing is the one piece not yet worked out**, and nothing has
 been drawn on the panel yet. No claim of on-screen output until there is a photo.
 
+## Eleventh — VIP under Wine is blocked by PACE; pivoting to drive the device directly
+
+VIP installed cleanly under Wine into `~/.wine-vip` (standalone at
+`C:\vst3\VIP_x64.exe`). Only `Authorizer.msi` failed, with `0x80070643`,
+because it installs `iLokDrvr.sys` -- a kernel driver Wine cannot load. But the
+deeper wall is that the VIP binary is **PACE-Eden wrapped**, and the wrapper
+refuses to start under Wine. PACE kernel-mode protection is a known dead end
+there; the only way to run VIP for real is a Windows VM with a genuine iLok
+authorization.
+
+Not worth it, because **we do not need VIP**. It would only have handed us the
+session *choreography* as a shortcut. What we already have is sufficient to drive
+the screen ourselves:
+
+- the runtime frame, confirmed on hardware (Tenth finding)
+- the full command dispatch tables (cmd 1..6; the 61-entry cmd-2 table)
+- op `0x3B` = load Lua script, wired to `luaL_loadbuffer`
+- all 20 of VIP's own Lua scripts, as readable source, showing the exact API and
+  a working 480x272 draw loop
+
+The one remaining unknown is the bit-packing of the script-upload payload (the
+routine at `0x08068070`). Decoding that, rather than capturing VIP, is now the
+path to our own Lua on the panel.
+
+## Twelfth — load-script CONFIRMED on hardware; we can put Lua on the device
+
+`prototypes/akai-advance/src/bin/load_script.rs` builds the op-0x3B message and
+sends it. The payload format, fully derived from firmware, is confirmed:
+
+```
+F0 47 00 2F 02 3B <outerlen:2x7> <id:2x7> <len:2x7> <N:2x7> <packed> F7
+```
+
+- id = script slot (<1024); len and N both = script byte count
+- <packed> = script as a contiguous LSB-first 7-bit stream (packer validated by
+  round-trip against a faithful re-impl of the firmware unpacker at 0x08068070:
+  25 named cases + 2000 fuzz, the only misses being scripts over the 14-bit
+  length ceiling of 16383 bytes)
+- all three length fields use (hi<<7 | lo), confirmed at 0x08067fcc
+
+The device replies:
+
+```
+F0 47 00 2F 02 3D 00 04 0D <slot> 3B 40 F7
+                           |       |  +- 0x40 ACK code
+                           |       +- op 0x3B echoed back
+                           +- slot id (0x64=100, 0x65=101 across two runs)
+```
+
+**Caveat, proven by a control run:** a deliberately-broken (syntax-error) script
+got the same `0x40` ACK as a valid one. The handler hard-codes 0x40 and ignores
+the loader's return value (matches the disassembly). So the ACK confirms "message
+received, slot written" — NOT "script compiled and ran." The device stayed alive
+through both loads; paced single messages provoke no wedge.
+
+Open: whether a script whose *main chunk* calls draw_rect paints the panel at
+load time (the firmware runs the chunk on load), or whether drawing needs a
+separate page/widget/flush trigger from among the other cmd-2 ops. That is the
+next thing to resolve, and only the screen can answer it.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
