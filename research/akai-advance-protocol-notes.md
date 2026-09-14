@@ -488,6 +488,54 @@ proves the device answers) and the camera.
 Not yet proven, and it should not be asserted until a script of ours is observed
 running on the panel.
 
+## Tenth — the frame is CONFIRMED on hardware
+
+`prototypes/akai-advance/src/bin/frame_probe.rs` sends each op with a
+deliberately wrong payload length, so the firmware must take its NAK path
+without ever running the operation. Twenty ops, twenty NAKs:
+
+```
+sent: F0 47 00 2F 02 39 00 03 00 00 00 F7        (op 0x39, which wants len 2)
+got:  F0 47 00 2F 02 3D 00 04 0D 00 39 47 F7
+                     |  |     |  |  |  +-- 0x47, the `movs r3, #0x47` constant
+                     |  |     |  |  +----- the op we sent
+                     |  |     |  +-------- 0x00, from `movs r1, #0`
+                     |  |     +----------- per-op code, from `movs r0, #N`
+                     |  +----------------- length 4
+                     +-------------------- op 0x3D = reply
+```
+
+Every field matches the disassembly of the error path exactly. **Addressing is
+`dev = 0x00`, `model = 0x2F`** — the family byte from Device Inquiry, not the
+`0x2E` the firmware updater used. So the confirmed runtime frame is:
+
+```
+F0 47 00 2F <cmd> <op> <len_hi7> <len_lo7> <payload...> F7
+```
+
+The per-op length table in the Ninth finding is confirmed too: each op NAKs when
+given `want + 1` bytes, and the NAK names the op. That is a precise, safe oracle —
+we can probe the shape of any op without executing it.
+
+The device stayed alive through the whole sweep. Paced at 120 ms, this provokes
+none of the Fifth finding's wedging.
+
+### One caveat on the probe
+
+Phase 1 (finding `dev`/`model`) treated *any* inbound message as a reply, and the
+first one it saw was a stray `A0 00 00`. The pair it settled on happened to be
+correct — phase 2's real NAKs prove it — but the detection itself was a false
+positive and should match on `F0 47` before being trusted.
+
+### Not yet done: drawing
+
+Loading a script is cmd 2 op `0x3B`. Its payload is
+`<id:2> <size:2> <count:2> <packed bytes>`, ids are bounded at 1024 by
+`cmp.w r0, #0x400`, and the body is bit-packed by the routine at `0x08068070`
+(14-bit count, then a 7-state bit shuffle) rather than by the naive 7-bit MIDI
+scheme. **That packing is the one piece not yet worked out**, and nothing has
+been drawn on the panel yet. No claim of on-screen output until there is a photo.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
