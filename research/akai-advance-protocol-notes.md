@@ -725,6 +725,22 @@ RIP-relative or absolute code references found, so the message-builders are not
 trivially anchored by those strings. A better VIP anchor would be the SysEx
 send path (the code writing the F0 47 00 2F 02 header), or the op-byte immediates.
 
+## Seventeenth — VIP static analysis is closed (PACE-encrypted)
+
+VIP_x64.dll is PACE-packed, so its code cannot be read statically:
+- imports ONLY KERNEL32/USER32/SHELL32 (a 29 MB MIDI+graphics+Lua plugin cannot
+  really import three basic DLLs — everything else is resolved at runtime)
+- the plaintext strings ("created all hardware pages", "lua_scripts", the Lua
+  source) have ZERO references of any kind (RIP-relative, absolute pointer, or
+  32-bit RVA)
+- entropy: .text = 8.00 with only ~10 valid instructions per 4 KB, .data = 8.00
+  (both encrypted); only .rdata is plaintext (5.34); .guard (7.17) is the stub
+
+So both VIP routes are blocked by the same PACE protection: it won't run under
+Wine, and its code won't disassemble. Unpacking PACE is a DRM-defeat last resort
+we are not taking. The recipe must come from observable artifacts: the ARM
+firmware (readable), on-device probing, and the camera.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
