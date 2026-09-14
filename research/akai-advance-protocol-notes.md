@@ -389,6 +389,105 @@ know how they are encoded on the wire. Specifically unresolved, and important:
 That is the next thing to settle, and a MIDI-layer or libusb-layer capture of VIP
 talking to the device would settle all of it at once.
 
+## Ninth — transport is MIDI after all, and the runtime command frame is decoded
+
+### Correction to the Eighth finding
+
+The Eighth finding worried that VIP's bundled `libusb-1.0.0.dylib` might mean it
+bypasses CoreMIDI and drives the bulk endpoints directly, making our ALSA-shaped
+client wrong. **It does not.** VIP imports exactly five libusb symbols:
+
+```
+libusb_init  libusb_exit
+libusb_get_device_list  libusb_free_device_list
+libusb_get_device_descriptor
+```
+
+No `libusb_open`, no `claim_interface`, no `bulk_transfer`. libusb is used purely
+for **enumeration** — noticing what is plugged in. All data goes over CoreMIDI,
+and the linked frameworks plus `MidiInCore` / `MidiOutCore` / `RtMidiIn` /
+`RtMidiVipDeviceInterface` symbols show VIP uses **RtMidi**.
+
+So the runtime protocol is SysEx over MIDI, and the existing ALSA client is the
+right shape. (The `libusb` guess was reasonable but wrong; recorded rather than
+edited out.)
+
+### The runtime parser
+
+Found by disassembling (capstone, Thumb) for `cmp rN, #0x47` — the Akai ID check.
+The runtime handler is at `0x0805A6BA`, distinct from the `0x70` firmware-update
+path. It validates `0x47` at buffer offset 5, then:
+
+```
+0x0805a6dc  ldrb  r0, [r2, #0xa]        ; length high
+0x0805a6de  ldrb  r3, [r2, #0xb]        ; length low
+0x0805a6e0  orr.w r3, r3, r0, lsl #7    ; 14-bit, 7 bits per byte
+0x0805a6f2  ldrb  r2, [r2, #8]          ; command
+0x0805a708  subs  r2, #1
+0x0805a712  cmp   r2, #5
+0x0805a714  bhi   <return>              ; so command is 1..6 ONLY
+0x0805a716  tbb   [pc, r2]
+```
+
+Which gives the frame:
+
+```
+F0 47 <dev> <model> <cmd> <sub> <len_hi7> <len_lo7> <payload...> F7
+```
+
+The `0x70` firmware-update command from the Seventh finding is outside `1..6`, so
+it is handled by a separate (bootloader) parser — consistent, not contradictory.
+
+### The command map
+
+`tbb` table on `<cmd>`, read as data:
+
+| cmd | handler | shape |
+|---:|---|---|
+| 1 | `0x0805A7A6` | takes buffer + length (`subs r1,#4`, buf `0x2000FE91`) -> `0x08059804` |
+| 2 | `0x0805A79C` | takes buffer + length, same buf -> `0x0805A9F8` |
+| 3 | `0x0805A76C` | sub-dispatch on `<sub>`, 9 entries |
+| 4 | `0x0805A762` | `<sub>` as a byte arg, buf `0x2000FE94` -> `0x08059DAC` |
+| 5 | `0x0805A758` | `<sub>` as a byte arg, same buf -> `0x08059F7C` |
+| 6 | `0x0805A72C` | `<sub>`: 0/1 -> handler; 2 -> builds a **reply** |
+
+Sub-dispatch under cmd 3 (`ldr.w pc, [r1, r2, lsl #2]`, 9 entries):
+
+| sub | target | note |
+|---:|---|---|
+| 0 | `0x0805A7BA` | |
+| 1 | `0x0805A6D6` | return stub — **unimplemented** |
+| 2 | `0x0805A7B6` | |
+| 3 | `0x0805A7E2` | |
+| 4 | `0x0805A6D6` | return stub — **unimplemented** |
+| 5 | `0x0805A6D6` | return stub — **unimplemented** |
+| 6 | `0x0805A7C4` | |
+| 7 | `0x0805A7F4` | |
+| 8 | `0x0805A7EE` | |
+
+Commands **1 and 2 are the bulk-payload commands** — they are the only two that
+take a buffer pointer and a length, so script upload and/or call-function live
+there. Command 6 sub 2 is the only path seen so far that constructs a reply
+(caps its payload at 1000 bytes, then calls the send routine with `(6, 3, ...)`).
+
+### Can we load our own Lua and talk to it?
+
+Everything points to yes, and nothing so far argues against it:
+
+- the interpreter is resident and VIP demonstrably loads scripts into it at
+  runtime, on stock firmware
+- the transport is plain MIDI SysEx, which we already speak
+- the frame is decoded
+- the command space is **six commands**, not a 128-wide blind sweep
+
+What is still missing is only the payload layout inside commands 1 and 2 — which
+carries the script, and which carries the function invocation. That is a small,
+bounded search, and we have two oracles for it: the reply path (cmd 6 sub 2
+proves the device answers) and the camera.
+
+Not yet proven, and it should not be asserted until a script of ours is observed
+running on the panel.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
