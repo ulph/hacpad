@@ -113,6 +113,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("baseline: alive");
 
+    // create_slot(id) — op 0x39, payload = id (2x7). Without this the slot's Lua
+    // state is null and op 0x3b runs in nothing (findings: script lifecycle).
+    let mut create = vec![0xF0, 0x47, 0x00, 0x2F, 0x02, 0x39, 0x00, 0x02];
+    create.extend_from_slice(&be14(slot as usize));
+    create.push(0xF7);
+    while rx.try_recv().is_ok() {}
+    conn.send(&create)?;
+    println!("create_slot({slot}) sent: {}", hex(&create));
+    if let Ok((p, r)) = rx.recv_timeout(Duration::from_millis(400)) {
+        println!("  create reply [{p}]: {}", hex(&r));
+    }
+    std::thread::sleep(Duration::from_millis(120));
+
     while rx.try_recv().is_ok() {}
     conn.send(&msg)?;
     println!("sent. collecting all replies for 1.2s...");

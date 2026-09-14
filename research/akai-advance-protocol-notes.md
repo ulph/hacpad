@@ -596,6 +596,43 @@ load time (the firmware runs the chunk on load), or whether drawing needs a
 separate page/widget/flush trigger from among the other cmd-2 ops. That is the
 next thing to resolve, and only the screen can answer it.
 
+## Thirteenth — the script lifecycle, and why loading alone does not draw
+
+Disassembling the cmd-2 workers (all share the script table at RAM 0x2000F360)
+gives the Lua-slot lifecycle:
+
+| op | want | worker | meaning |
+|---|---|---|---|
+| 0x39 | 2 | 0x080654B0 | **create_slot(id)** — malloc an 8-byte slot, table[id]=slot; slot->state stays null |
+| 0x3B | var | 0x0806571C | **run(id, chunk)** — load+pcall the packed chunk in slot[id]'s state |
+| 0x3C | var | 0x08065668 | **call(id, name, args)** — push global `name`, pcall with args |
+
+Both 0x3B and 0x3C require slot[id] AND slot->state to be non-null, or they bail
+(0x41 no slot / 0x4D null state). That explains the first load doing nothing:
+slot 100 was never created, so 0x3B ran in nothing.
+
+**Confirmed on hardware:** create_slot(100) then load now both ACK
+(`...39 40 F7`, `...3B 40 F7`), device stays alive. But the panel is still
+UNCHANGED — photographed via the viewer, still the standalone SETUP/DAW-select
+page.
+
+The reason is the compositor, not the load: the active firmware page redraws
+every frame and overwrites anything our chunk's draw_rect paints. Our draw goes
+to a back-buffer the native page immediately clobbers. To make pixels stick we
+must become the ACTIVE page — i.e. create a page, put a widget bound to our
+script on it, and show that page. Those are the VIP operations behind the strings
+"created all hardware pages" / "Too many page created on device" / "Too many
+widgets created on device".
+
+Next target: the page/widget ops. Prime candidates are 0x00 and 0x2D (their
+workers 0x0806255C / 0x08062A20 both allocate-and-init via a 5-call pattern
+including 0x08064FCC) for create, and a single-byte op like 0x10 (0x08063BC4) for
+show/select.
+
+Open lifecycle gap: which op sets slot->state (allocates the Lua VM). create_slot
+leaves it null, yet the loads ACK — so either a state is lazily created, or the
+ACK (hard-coded 0x40) is hiding a 0x4D. To be resolved with the page work.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
