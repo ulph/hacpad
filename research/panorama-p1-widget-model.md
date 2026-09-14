@@ -152,15 +152,31 @@ This is the payoff: instead of a pile of independently-diffed fields, the device
 exactly these operations. Everything above exists to justify why these are the right verbs
 and not others.
 
-1. **`switch_background(bg, title_bar)`** — sets the active Background AND resupplies its own
-   Body content in one call (`Background::body_fields()`, nullable per field — a variant that
-   doesn't define a Body field omits that write, trusting the device's confirmed auto-clear
-   rather than forcing a blank one). Also always resends the four sticky Chrome fields
+1. **`switch_background(bg, title: TitleBar)`** — sets the active Background AND resupplies its
+   own Body content in one call (`Background::body_fields()`, nullable per field — a variant
+   that doesn't define a Body field omits that write, trusting the device's confirmed auto-clear
+   rather than forcing a blank one).
+
+   **Every field is enumerated and named, never positional.** `Mixer` takes `knob_1..knob_8`,
+   `PadView` takes `pad_a1..pad_d4` (the device prints those row letters A-D down the side of
+   the grid itself, so the field name points at a pad you can physically touch), `TitleBar`
+   takes `title_left`/`title_center`/`title_right` (confirmed [red, blue, red] on hardware).
+   A fixed-size array was still positional — `tabs[2]` never said *which* slot that is — so the
+   arrays are gone wherever the hardware has a fixed, nameable set of slots. `Vec` survives in
+   exactly two places, where the list is genuinely open-ended: `ListHighlighted` and
+   `BrowserList`. Also always resends the four sticky Chrome fields
    (title_bar/big_font/current_value/tabs, `full_redraw`) unconditionally, since those are
    confirmed to survive a switch untouched -- meaning an overlay drawn over them leaves stale
    content there until something explicitly rewrites them (Thirty-eighth finding: this is
    exactly how a popup's own Esc/Enter buttons got permanently stuck).
-2. **`set_footer(tabs)` / `set_header_big_font(text)` / `set_header_current_value(text)`** —
+2. **`set_footer(Footer)` / `set_header_big_font(text)` / `set_header_current_value(text)`** —
+   `Footer`'s five slots are named `screen_button_0..4` after the physical buttons they label —
+   the SAME five this project calls `screen_button_N` as inputs and `Led::ScreenButton` as LEDs.
+   That three-way coupling is locked by a test
+   (`screen_button_vocabulary_is_shared_across_input_led_and_footer`), not by comment, so
+   renaming one side fails the build rather than letting the three drift apart while each still
+   looks locally fine. Same for the status strip
+   (`status_led_vocabulary_matches_input_names`) —
    the three independently-settable Chrome fields, named consistently after the Header/Footer
    layer split (`title_bar` is set via `switch_background` itself, as part of `Header`).
    `DeviceState` stores these as `header: Header { title_bar, big_font, current_value }` and

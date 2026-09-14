@@ -34,32 +34,44 @@ fn main() -> Result<(), Box<dyn Error>> {
     default_conn.send(&sysex(&INIT_2))?;
     sleep(Duration::from_millis(200));
 
-    let title_bar: [String; 3] = ["VERB1".into(), "VERB2".into(), "VERB3".into()];
+    let title = TitleBar { title_left: "VERB1".into(), title_center: "VERB2".into(), title_right: "VERB3".into() };
 
     let bg = match which.as_str() {
+        // Pads named by the row letters the device prints down the side.
         "pads" => Background::PadView {
-            // One Pad per physical pad -- label and lit state together,
-            // instead of two parallel 16-lists aligned by index.
-            pads: std::array::from_fn(|i| Pad {
-                name: format!("P{}", i + 1),
-                state: if i == 0 || i == 1 || i == 15 { PadState::Lit } else { PadState::Default },
-            }),
+            pad_a1: Pad { name: "A1".into(), state: PadState::Lit },
+            pad_a2: Pad { name: "A2".into(), state: PadState::Lit },
+            pad_a3: Pad { name: "A3".into(), state: PadState::Default },
+            pad_a4: Pad { name: "A4".into(), state: PadState::Default },
+            pad_b1: Pad { name: "B1".into(), state: PadState::Default },
+            pad_b2: Pad { name: "B2".into(), state: PadState::Default },
+            pad_b3: Pad { name: "B3".into(), state: PadState::Default },
+            pad_b4: Pad { name: "B4".into(), state: PadState::Default },
+            pad_c1: Pad { name: "C1".into(), state: PadState::Default },
+            pad_c2: Pad { name: "C2".into(), state: PadState::Default },
+            pad_c3: Pad { name: "C3".into(), state: PadState::Default },
+            pad_c4: Pad { name: "C4".into(), state: PadState::Default },
+            pad_d1: Pad { name: "D1".into(), state: PadState::Default },
+            pad_d2: Pad { name: "D2".into(), state: PadState::Default },
+            pad_d3: Pad { name: "D3".into(), state: PadState::Default },
+            pad_d4: Pad { name: "D4".into(), state: PadState::Lit },
         },
         "launcher" => Background::TransportLauncher {
             loop_left: "L:1.1.1".to_string(),
             loop_right: "R:5.1.1".to_string(),
-            buttons: std::array::from_fn(|i| format!("T{}", i + 1)),
+            button_1: "T1".into(), button_2: "T2".into(), button_3: "T3".into(), button_4: "T4".into(),
+            button_5: "T5".into(), button_6: "T6".into(), button_7: "T7".into(), button_8: "T8".into(),
         },
-        "mixer" | "overlaytest" => {
-            const NAMES: [&str; 8] = ["CUT", "RES", "ATK", "DEC", "SUS", "REL", "DRV", "MIX"];
-            const VALUES: [&str; 8] = ["1.2k", "45%", "12ms", "80ms", "0dB", "200ms", "30%", "wet"];
-            Background::Mixer {
-                knobs: std::array::from_fn(|i| Knob {
-                    name: NAMES[i].to_string(),
-                    value: VALUES[i].to_string(),
-                }),
-            }
-        }
+        "mixer" | "overlaytest" => Background::Mixer {
+            knob_1: Knob { name: "CUT".into(), value: "1.2k".into() },
+            knob_2: Knob { name: "RES".into(), value: "45%".into() },
+            knob_3: Knob { name: "ATK".into(), value: "12ms".into() },
+            knob_4: Knob { name: "DEC".into(), value: "80ms".into() },
+            knob_5: Knob { name: "SUS".into(), value: "0dB".into() },
+            knob_6: Knob { name: "REL".into(), value: "200ms".into() },
+            knob_7: Knob { name: "DRV".into(), value: "30%".into() },
+            knob_8: Knob { name: "MIX".into(), value: "wet".into() },
+        },
         other => {
             eprintln!("unknown background {other:?}, expected pads|launcher|mixer|overlaytest");
             std::process::exit(1);
@@ -72,7 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // messy" scenario flagged when designing show/hide semantics.
         let mut state = DeviceState::default();
         println!("1) switch_background(Mixer)...");
-        for msg in state.switch_background(bg, title_bar) {
+        for msg in state.switch_background(bg, title.clone()) {
             default_conn.send(&msg)?;
             sleep(Duration::from_millis(50));
         }
@@ -107,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!("Sending Background::{which} via switch_background_messages()...");
-    for msg in switch_background_messages(&bg, &title_bar) {
+    for msg in switch_background_messages(&bg, &[title.title_left.clone(), title.title_center.clone(), title.title_right.clone()]) {
         default_conn.send(&msg)?;
         sleep(Duration::from_millis(50));
     }

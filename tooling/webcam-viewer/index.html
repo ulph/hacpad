@@ -491,7 +491,10 @@ function buildStatusLedPanel() {
     return radio;
   };
   mkOption('0', 'Off').checked = true;
-  STATUS_LED_CCS.forEach((cc, i) => mkOption(String(i + 1), `Status${i + 1}`));
+  // Labels match the semantic/input vocabulary (status_led_0..3) for the same
+  // four CCs; the raw VALUES stay 1..4 since that's this path's existing
+  // encoding (0 = off) and renumbering it would break existing raw clients.
+  STATUS_LED_CCS.forEach((cc, i) => mkOption(String(i + 1), `status${i}`));
 }
 
 function statusLedValue() {
@@ -1029,20 +1032,25 @@ function sendSemantic(cmd) {
 // actually clicked. Field names are camelCase to match `Background`'s
 // `#[serde(rename_all = "camelCase")]` wire shape (lib.rs).
 const BACKGROUND_DEFAULTS = {
-  Mixer: { paramNames: ['CUT', 'RES', 'ATK', 'DEC', 'SUS', 'REL', 'DRV', 'MIX'], paramValues: ['1.2k', '45%', '12ms', '80ms', '0dB', '200ms', '30%', 'wet'] },
-  FaderSplit: { labels: Array.from({ length: 16 }, (_, i) => `X${i + 1}`) },
-  FaderRow: { labels: Array.from({ length: 8 }, (_, i) => `F${i + 1}`) },
-  PadView: { padNames: Array.from({ length: 16 }, (_, i) => `P${i + 1}`), padStates: Array.from({ length: 16 }, () => 'Default') },
-  PadView3Row: { padNames: Array.from({ length: 12 }, (_, i) => `P${i + 1}`), padStates: Array.from({ length: 12 }, () => 'Default') },
-  List: { items: ['I1', 'I2', 'I3', 'I4', 'I5'] },
-  Grid: { labels: Array.from({ length: 8 }, (_, i) => `G${i + 1}`) },
-  TransportLauncher: { loopLeft: 'L:1.1.1', loopRight: 'R:5.1.1', labels: Array.from({ length: 8 }, (_, i) => `T${i + 1}`) },
-  Menu: {}, // unit variant -- no content fields characterized yet (see lib.rs)
+  Mixer: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`knob${i}`, { name: `K${i}`, value: `${i*10}` }])),
+  FaderSplit: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`fader${i}`, { top: `T${i}`, bottom: `B${i}` }])),
+  FaderRow: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`fader${i}`, `F${i}`])),
+  PadView: Object.fromEntries(['a','b','c','d'].flatMap(r =>
+    [1,2,3,4].map(c => [`pad${r.toUpperCase()}${c}`, { name: `${r.toUpperCase()}${c}`, state: 'Default' }]))),
+  PadView3Row: Object.fromEntries(['a','b','c'].flatMap(r =>
+    [1,2,3,4].map(c => [`pad${r.toUpperCase()}${c}`, { name: `${r.toUpperCase()}${c}`, state: 'Default' }]))),
+  List: Object.fromEntries([1,2,3,4,5].map(i => [`item${i}`, `I${i}`])),
+  Grid: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`button${i}`, `G${i}`])),
+  TransportLauncher: Object.assign(
+    { loopLeft: 'L:1.1.1', loopRight: 'R:5.1.1' },
+    Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`button${i}`, `T${i}`]))),
+  Menu: {}, // unit variant -- no content fields characterized yet
+  // The two genuinely OPEN lists keep arrays; everything else is enumerated.
   ListHighlighted: { items: ['I1', 'I2', 'I3'], highlighted: 0 },
-  SceneButtons: { labels: ['S1', 'S2', 'S3', 'S4'] },
+  SceneButtons: Object.fromEntries([1,2,3,4].map(i => [`scene${i}`, `S${i}`])),
   BrowserList: { items: ['B1', 'B2', 'B3'] },
-  Reset: {}, // unit variant -- confirmed content-write no-op
-  Blank: {}, // unit variant -- deliberately empty content area
+  Reset: {},
+  Blank: {},
 };
 
 (function buildBackgroundTypeSelect() {
@@ -1069,8 +1077,16 @@ el('sem-switch-btn').addEventListener('click', () => {
     return;
   }
   const background = Object.assign({ type: el('sem-bg-type').value }, fields);
-  const titleBar = [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value];
-  sendSemantic({ cmd: 'switchBackground', background, titleBar });
+  // Every field named, nothing positional: the title bar's three segments go
+  // as titleLeft/titleCenter/titleRight rather than an array whose slot
+  // meanings you'd have to count out.
+  sendSemantic({
+    cmd: 'switchBackground',
+    background,
+    titleLeft: el('in-tb1').value,
+    titleCenter: el('in-tb2').value,
+    titleRight: el('in-tb3').value,
+  });
 });
 
 // Popup/message actions reuse the SAME raw input fields as the checkboxes
@@ -1125,7 +1141,7 @@ const SEMANTIC_LEDS = [
   const statusPanel = el('sem-status-led-panel');
   // One register with five states -> an enum on the wire, not a number
   // with magic values. There's no way to express "two lit at once".
-  ['off', 'position1', 'position2', 'position3', 'position4'].forEach(state => {
+  ['off', 'status0', 'status1', 'status2', 'status3'].forEach(state => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = state;
@@ -1142,7 +1158,13 @@ el('sem-message-show-btn').addEventListener('click', () => {
 el('sem-message-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hideMessage' }));
 
 el('sem-tabs-btn').addEventListener('click', () => {
-  sendSemantic({ cmd: 'setFooter', tabs: csv(el('in-tabs').value) });
+  // Named per physical button, matching screen_button_0..4 everywhere else.
+  const t = csv(el('in-tabs').value);
+  sendSemantic({
+    cmd: 'setFooter',
+    screenButton0: t[0] || ' ', screenButton1: t[1] || ' ', screenButton2: t[2] || ' ',
+    screenButton3: t[3] || ' ', screenButton4: t[4] || ' ',
+  });
 });
 el('sem-bigfont-btn').addEventListener('click', () => {
   sendSemantic({ cmd: 'setHeaderBigFont', text: el('in-bigfont').value });

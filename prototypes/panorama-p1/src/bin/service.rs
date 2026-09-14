@@ -182,8 +182,16 @@ enum SemanticCommand {
     /// value}; 8]` rather than two parallel lists), so the wire shape is
     /// checked by serde instead of a caller discovering a wrong-length CSV
     /// at render time.
-    #[serde(rename_all = "camelCase")]
-    SwitchBackground { background: Background, title_bar: [String; 3] },
+    /// Every field enumerated on the wire: the Background's own named slots
+    /// (`knob1`..`knob8`, `padA1`..`padD4`, ...) plus the title bar's three
+    /// named segments flattened alongside -- `{"cmd":"switchBackground",
+    /// "background":{...},"titleLeft":"A","titleCenter":"B","titleRight":"C"}`.
+    /// Nothing positional, so no slot's meaning depends on counting.
+    SwitchBackground {
+        background: Background,
+        #[serde(flatten)]
+        title: TitleBar,
+    },
     /// Genuinely open-ended (the popup paginates), so a list here is right.
     ShowPopup { items: Vec<String> },
     #[serde(rename_all = "camelCase")]
@@ -195,8 +203,14 @@ enum SemanticCommand {
     HidePopup,
     ShowMessage { text: String },
     HideMessage,
-    /// Exactly 5 tabs -- the real slot count.
-    SetFooter { tabs: [String; 5] },
+    /// The five tab labels, each named for the physical button it sits above:
+    /// `{"cmd":"setFooter","screenButton0":"A",...,"screenButton4":"E"}` --
+    /// the same `screen_button_N` vocabulary used for those buttons as inputs
+    /// and as LEDs.
+    SetFooter {
+        #[serde(flatten)]
+        footer: Footer,
+    },
     #[serde(rename_all = "camelCase")]
     SetHeaderBigFont { text: String },
     #[serde(rename_all = "camelCase")]
@@ -302,8 +316,8 @@ impl Device {
     /// purely "call the right DeviceState method, send the bytes it returns."
     fn apply_semantic(&mut self, cmd: SemanticCommand) -> Result<(), Box<dyn Error>> {
         match cmd {
-            SemanticCommand::SwitchBackground { background, title_bar } => {
-                for msg in self.device_state.switch_background(background, title_bar) {
+            SemanticCommand::SwitchBackground { background, title } => {
+                for msg in self.device_state.switch_background(background, title) {
                     self.default_conn.send(&msg)?;
                 }
             }
@@ -331,8 +345,8 @@ impl Device {
                     self.default_conn.send(&msg)?;
                 }
             }
-            SemanticCommand::SetFooter { tabs } => {
-                self.default_conn.send(&self.device_state.set_footer(tabs))?;
+            SemanticCommand::SetFooter { footer } => {
+                self.default_conn.send(&self.device_state.set_footer(footer))?;
             }
             SemanticCommand::SetHeaderBigFont { text } => {
                 self.default_conn.send(&self.device_state.set_header_big_font(text))?;
@@ -413,11 +427,16 @@ impl Device {
             // The RAW path keeps its number-with-magic-values shape (it's the
             // uncomposed perspective, deliberately unchanged); map it onto the
             // semantic enum here rather than duplicating the strip's rules.
+            // NB the index bases differ on purpose: the raw field is the
+            // legacy uncomposed shape (1..=4 selects a position, 0 clears),
+            // while the semantic enum is 0-based to match the input side's
+            // status_led_0..3 for these same CCs. Translate at the boundary
+            // rather than renumbering the raw protocol under existing clients.
             let state = match pos {
-                1 => StatusLed::Position1,
-                2 => StatusLed::Position2,
-                3 => StatusLed::Position3,
-                4 => StatusLed::Position4,
+                1 => StatusLed::Status0,
+                2 => StatusLed::Status1,
+                3 => StatusLed::Status2,
+                4 => StatusLed::Status3,
                 _ => StatusLed::Off,
             };
             for msg in status_led_messages(state) {
@@ -666,17 +685,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     // no longer goes through the raw per-field path: seeding a belief without
     // sending it is exactly how the model and the panel drift apart.
     device.device_state.seed_background(
-        Background::Mixer {
-            knobs: std::array::from_fn(|i| Knob {
-                name: initial.names[i].clone(),
-                value: initial.values[i].clone(),
-            }),
+        {
+            let mut k = initial.names.iter().zip(initial.values.iter())
+                .map(|(n, v)| Knob { name: n.clone(), value: v.clone() });
+            let mut next = || k.next().unwrap_or_else(Knob::default);
+            Background::Mixer {
+                knob_1: next(), knob_2: next(), knob_3: next(), knob_4: next(),
+                knob_5: next(), knob_6: next(), knob_7: next(), knob_8: next(),
+            }
         },
-        std::array::from_fn(|i| initial.title_bar.get(i).cloned().unwrap_or_default()),
+        TitleBar {
+            title_left: initial.title_bar.first().cloned().unwrap_or_default(),
+            title_center: initial.title_bar.get(1).cloned().unwrap_or_default(),
+            title_right: initial.title_bar.get(2).cloned().unwrap_or_default(),
+        },
     );
-    device.device_state.set_footer(std::array::from_fn(|i| {
-        initial.tabs.get(i).cloned().unwrap_or_else(|| " ".to_string())
-    }));
+    {
+        let tab = |i: usize| initial.tabs.get(i).cloned().unwrap_or_else(|| " ".to_string());
+        device.device_state.set_footer(Footer {
+            screen_button_0: tab(0), screen_button_1: tab(1), screen_button_2: tab(2),
+            screen_button_3: tab(3), screen_button_4: tab(4),
+        });
+    }
     device.device_state.set_header_big_font(initial.bigfont.clone());
     device.device_state.set_header_current_value(initial.current_value.clone());
     for &cc in initial.leds_on.as_deref().unwrap_or(&[]) {
@@ -685,10 +715,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     device.device_state.set_status_led(match initial.status_led {
-        Some(1) => StatusLed::Position1,
-        Some(2) => StatusLed::Position2,
-        Some(3) => StatusLed::Position3,
-        Some(4) => StatusLed::Position4,
+        Some(1) => StatusLed::Status0,
+        Some(2) => StatusLed::Status1,
+        Some(3) => StatusLed::Status2,
+        Some(4) => StatusLed::Status3,
         _ => StatusLed::Off,
     });
     // The "hacpad" resting message genuinely IS showing on top at boot.

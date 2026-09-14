@@ -242,8 +242,9 @@ pub fn write_title_bar(page_template: u8, segments: &[String]) -> Vec<u8> {
 /// enum; we've only visually distinguished 2 of the 9 on hardware (see
 /// "Twenty-fifth finding"), so the rest are kept as `Raw(n)` rather than
 /// guessed at.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum PadState {
+    #[default]
     Default,
     Lit, // confirmed red/pink tint on hardware
     Raw(u8),
@@ -267,21 +268,21 @@ impl PadState {
 
 /// One knob on the `Mixer` background: its label and the value shown under
 /// it. (displayId 6 and 7 respectively, but a caller never sees that.)
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Knob {
     pub name: String,
     pub value: String,
 }
 
 /// One pad on `PadView`/`PadView3Row`: its label and its own lit state.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Pad {
     pub name: String,
     pub state: PadState,
 }
 
 /// One fader on `FaderSplit`, which draws TWO stacked labels per fader.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct StackedLabel {
     pub top: String,
     pub bottom: String,
@@ -304,48 +305,144 @@ pub struct StackedLabel {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Background {
-    /// 4x2 knob grid (the default page on connect). One `Knob` per physical
-    /// knob, so a knob's label travels with its own value instead of the
-    /// caller having to keep two same-length lists in sync by index.
-    Mixer { knobs: [Knob; 8] },
-    /// 8 faders split into two groups of 4, each fader showing TWO stacked
-    /// labels (confirmed: template 18 has 16 name slots, not 8). One
-    /// `StackedLabel` per fader rather than a flat 16-list whose
-    /// index-to-position mapping (0-3 top-left, 4-7 bottom-left, 8-11
-    /// top-right, 12-15 bottom-right) the caller would otherwise have to
-    /// know and get right -- `body_fields` does that mapping now.
-    FaderSplit { faders: [StackedLabel; 8] },
+    /// 4x2 knob grid (the default page on connect). Each knob is named, not
+    /// indexed -- `knob_3` says which physical knob, where `knobs[2]` did not.
+    #[serde(rename_all = "camelCase")]
+    Mixer {
+        knob_1: Knob,
+        knob_2: Knob,
+        knob_3: Knob,
+        knob_4: Knob,
+        knob_5: Knob,
+        knob_6: Knob,
+        knob_7: Knob,
+        knob_8: Knob,
+    },
+    /// 8 faders split into two groups of 4, each showing TWO stacked labels
+    /// (template 18 has 16 name slots, not 8). Named per fader, with top and
+    /// bottom paired -- `body_fields` scatters them into the wire's real slot
+    /// order so no caller has to know it.
+    #[serde(rename_all = "camelCase")]
+    FaderSplit {
+        fader_1: StackedLabel,
+        fader_2: StackedLabel,
+        fader_3: StackedLabel,
+        fader_4: StackedLabel,
+        fader_5: StackedLabel,
+        fader_6: StackedLabel,
+        fader_7: StackedLabel,
+        fader_8: StackedLabel,
+    },
     /// 8 faders in one continuous row, one label each.
-    FaderRow { fader_labels: [String; 8] },
-    /// 4x4 pad grid, rows A-D. One `Pad` per physical pad, pairing each
-    /// pad's label with its own lit state.
-    PadView { pads: [Pad; 16] },
+    #[serde(rename_all = "camelCase")]
+    FaderRow {
+        fader_1: String,
+        fader_2: String,
+        fader_3: String,
+        fader_4: String,
+        fader_5: String,
+        fader_6: String,
+        fader_7: String,
+        fader_8: String,
+    },
+    /// 4x4 pad grid. Named by the ROW LETTERS the device itself prints down
+    /// the side (A-D) and the column within that row, so `pad_c2` is the pad
+    /// you can point at on the unit.
+    #[serde(rename_all = "camelCase")]
+    PadView {
+        pad_a1: Pad,
+        pad_a2: Pad,
+        pad_a3: Pad,
+        pad_a4: Pad,
+        pad_b1: Pad,
+        pad_b2: Pad,
+        pad_b3: Pad,
+        pad_b4: Pad,
+        pad_c1: Pad,
+        pad_c2: Pad,
+        pad_c3: Pad,
+        pad_c4: Pad,
+        pad_d1: Pad,
+        pad_d2: Pad,
+        pad_d3: Pad,
+        pad_d4: Pad,
+    },
     /// 3x4 pad grid, rows A-C only -- genuinely distinct from PadView, not
     /// just an unlabeled 4th row (Sixteenth finding).
-    PadView3Row { pads: [Pad; 12] },
+    #[serde(rename_all = "camelCase")]
+    PadView3Row {
+        pad_a1: Pad,
+        pad_a2: Pad,
+        pad_a3: Pad,
+        pad_a4: Pad,
+        pad_b1: Pad,
+        pad_b2: Pad,
+        pad_b3: Pad,
+        pad_b4: Pad,
+        pad_c1: Pad,
+        pad_c2: Pad,
+        pad_c3: Pad,
+        pad_c4: Pad,
+    },
     /// 1 fader + a vertical bulleted list, hard-capped at 5 visible entries
-    /// (confirmed a real widget limit, not under-testing -- so a fixed 5,
-    /// not an open list).
-    List { items: [String; 5] },
+    /// (confirmed a real widget limit, not under-testing).
+    #[serde(rename_all = "camelCase")]
+    List {
+        item_1: String,
+        item_2: String,
+        item_3: String,
+        item_4: String,
+        item_5: String,
+    },
     /// Plain 2x4 button grid, no fader/knob widgets.
-    Grid { buttons: [String; 8] },
+    #[serde(rename_all = "camelCase")]
+    Grid {
+        button_1: String,
+        button_2: String,
+        button_3: String,
+        button_4: String,
+        button_5: String,
+        button_6: String,
+        button_7: String,
+        button_8: String,
+    },
     /// `L:`/`R:` locator bars + a 2x4 grid beneath.
     #[serde(rename_all = "camelCase")]
-    TransportLauncher { loop_left: String, loop_right: String, buttons: [String; 8] },
+    TransportLauncher {
+        loop_left: String,
+        loop_right: String,
+        button_1: String,
+        button_2: String,
+        button_3: String,
+        button_4: String,
+        button_5: String,
+        button_6: String,
+        button_7: String,
+        button_8: String,
+    },
     /// Content-area widget never characterized -- only the (template-
     /// independent) bottom menu-button relabeling was ever tested against
     /// this template. Kept as a bare marker, no content fields offered yet.
     Menu,
-    /// A list with one row shown highlighted; exact slot count/labeling
-    /// scheme not characterized beyond "list-like" (Fifteenth finding) --
-    /// a genuinely open list, so `Vec`, not a fixed array.
+    /// A list with one row shown highlighted; slot count/labeling scheme not
+    /// characterized beyond "list-like" (Fifteenth finding) -- a genuinely
+    /// OPEN list, so `Vec`. This is the case the fixed-field treatment
+    /// deliberately does not apply to.
+    #[serde(rename_all = "camelCase")]
     ListHighlighted { items: Vec<String>, highlighted: usize },
-    /// 4 scene buttons `S1`-`S4` (+ a "B" indicator whose own field is
-    /// unidentified).
-    SceneButtons { scenes: [String; 4] },
-    /// Up to 8 rows, each paired with a "Pre" label; this covers BOTH
-    /// template 8 and 9, which render indistinguishably (Fifteenth finding).
-    /// Open list (the widget's real cap isn't pinned down), so `Vec`.
+    /// 4 scene buttons -- the device prints them `S1`-`S4`, so they're named
+    /// for that (+ a "B" indicator whose own field is unidentified).
+    #[serde(rename_all = "camelCase")]
+    SceneButtons {
+        scene_1: String,
+        scene_2: String,
+        scene_3: String,
+        scene_4: String,
+    },
+    /// Up to 8 rows, each paired with a "Pre" label; covers BOTH template 8
+    /// and 9, which render indistinguishably (Fifteenth finding). Open list
+    /// (the real cap isn't pinned down), so `Vec`.
+    #[serde(rename_all = "camelCase")]
     BrowserList { items: Vec<String> },
     /// Reset sentinel -- Content writes are a confirmed no-op here.
     Reset,
@@ -353,9 +450,7 @@ pub enum Background {
     /// plainest layout tested: no fader/knob widgets at all) with nothing
     /// written to it. Distinct from `Reset` (template 0), which falls back
     /// to the device's own native default fader view rather than actually
-    /// looking blank. Chrome (title_bar/big_font/etc) still renders on top
-    /// regardless of Background -- pass empty chrome fields too via
-    /// `DeviceState` for the closest thing to an actually black screen.
+    /// looking blank.
     Blank,
 }
 
@@ -397,43 +492,56 @@ impl Background {
     fn body_fields(&self) -> BodyFields {
         let mut f = BodyFields::default();
         match self {
-            Background::Mixer { knobs } => {
-                f.names = Some(knobs.iter().map(|k| k.name.clone()).collect());
-                f.values = Some(knobs.iter().map(|k| k.value.clone()).collect());
+            Background::Mixer { knob_1, knob_2, knob_3, knob_4, knob_5, knob_6, knob_7, knob_8 } => {
+                let ks = [knob_1, knob_2, knob_3, knob_4, knob_5, knob_6, knob_7, knob_8];
+                f.names = Some(ks.iter().map(|k| k.name.clone()).collect());
+                f.values = Some(ks.iter().map(|k| k.value.clone()).collect());
             }
-            // Template 18's 16 name slots are laid out as two stacked rows
-            // per group of 4 faders: indices 0-3 are the left group's TOP
-            // labels, 4-7 that group's BOTTOM labels, 8-11 the right group's
-            // top, 12-15 its bottom ("Follow-up on template 18" finding).
-            // Callers hand over 8 faders with top/bottom paired; the
-            // scattering into that order happens here, once.
-            Background::FaderSplit { faders } => {
+            // Template 18's 16 name slots are two stacked rows per group of
+            // 4 faders: 0-3 left tops, 4-7 left bottoms, 8-11 right tops,
+            // 12-15 right bottoms ("Follow-up on template 18" finding).
+            // Callers name a fader and pair its top/bottom; the scattering
+            // into that order happens here, once.
+            Background::FaderSplit { fader_1, fader_2, fader_3, fader_4, fader_5, fader_6, fader_7, fader_8 } => {
+                let fs = [fader_1, fader_2, fader_3, fader_4, fader_5, fader_6, fader_7, fader_8];
                 let mut names = vec![String::new(); 16];
-                for (i, fader) in faders.iter().enumerate() {
+                for (i, fader) in fs.iter().enumerate() {
                     let (top, bottom) = if i < 4 { (i, i + 4) } else { (i + 4, i + 8) };
                     names[top] = fader.top.clone();
                     names[bottom] = fader.bottom.clone();
                 }
                 f.names = Some(names);
             }
-            Background::FaderRow { fader_labels } => f.names = Some(fader_labels.to_vec()),
-            Background::Grid { buttons } => f.names = Some(buttons.to_vec()),
-            Background::PadView { pads } => {
-                f.names = Some(pads.iter().map(|p| p.name.clone()).collect());
-                f.pad_state = Some(pads.iter().map(|p| p.state.as_byte()).collect());
+            Background::FaderRow { fader_1, fader_2, fader_3, fader_4, fader_5, fader_6, fader_7, fader_8 } => {
+                f.names = Some([fader_1, fader_2, fader_3, fader_4, fader_5, fader_6, fader_7, fader_8].iter().map(|s| (*s).clone()).collect());
             }
-            Background::PadView3Row { pads } => {
-                f.names = Some(pads.iter().map(|p| p.name.clone()).collect());
-                f.pad_state = Some(pads.iter().map(|p| p.state.as_byte()).collect());
+            Background::Grid { button_1, button_2, button_3, button_4, button_5, button_6, button_7, button_8 } => {
+                f.names = Some([button_1, button_2, button_3, button_4, button_5, button_6, button_7, button_8].iter().map(|s| (*s).clone()).collect());
             }
-            Background::List { items } => f.names = Some(items.to_vec()),
-            Background::TransportLauncher { loop_left, loop_right, buttons } => {
+            // Pads go out in row order A,B,C,D -- matching both the wire's
+            // index order and the row letters printed on the device.
+            Background::PadView { pad_a1, pad_a2, pad_a3, pad_a4, pad_b1, pad_b2, pad_b3, pad_b4, pad_c1, pad_c2, pad_c3, pad_c4, pad_d1, pad_d2, pad_d3, pad_d4 } => {
+                let ps = [pad_a1, pad_a2, pad_a3, pad_a4, pad_b1, pad_b2, pad_b3, pad_b4, pad_c1, pad_c2, pad_c3, pad_c4, pad_d1, pad_d2, pad_d3, pad_d4];
+                f.names = Some(ps.iter().map(|p| p.name.clone()).collect());
+                f.pad_state = Some(ps.iter().map(|p| p.state.as_byte()).collect());
+            }
+            Background::PadView3Row { pad_a1, pad_a2, pad_a3, pad_a4, pad_b1, pad_b2, pad_b3, pad_b4, pad_c1, pad_c2, pad_c3, pad_c4 } => {
+                let ps = [pad_a1, pad_a2, pad_a3, pad_a4, pad_b1, pad_b2, pad_b3, pad_b4, pad_c1, pad_c2, pad_c3, pad_c4];
+                f.names = Some(ps.iter().map(|p| p.name.clone()).collect());
+                f.pad_state = Some(ps.iter().map(|p| p.state.as_byte()).collect());
+            }
+            Background::List { item_1, item_2, item_3, item_4, item_5 } => {
+                f.names = Some([item_1, item_2, item_3, item_4, item_5].iter().map(|s| (*s).clone()).collect());
+            }
+            Background::TransportLauncher { loop_left, loop_right, button_1, button_2, button_3, button_4, button_5, button_6, button_7, button_8 } => {
                 f.page_labels = Some(vec![loop_left.clone(), loop_right.clone()]);
-                f.names = Some(buttons.to_vec());
+                f.names = Some([button_1, button_2, button_3, button_4, button_5, button_6, button_7, button_8].iter().map(|s| (*s).clone()).collect());
             }
             Background::Menu | Background::Reset | Background::Blank => {}
             Background::ListHighlighted { items, .. } => f.names = Some(items.clone()),
-            Background::SceneButtons { scenes } => f.names = Some(scenes.to_vec()),
+            Background::SceneButtons { scene_1, scene_2, scene_3, scene_4 } => {
+                f.names = Some([scene_1, scene_2, scene_3, scene_4].iter().map(|s| (*s).clone()).collect());
+            }
             Background::BrowserList { items } => f.names = Some(items.clone()),
         }
         f
@@ -461,12 +569,35 @@ struct BodyFields {
 /// stale content there until something rewrites it.
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TitleBar {
+    /// The three segments, named for where they render rather than indexed --
+    /// confirmed on hardware as [red, blue, red] left to right, so
+    /// `title_center` is the blue one. A positional `[String; 3]` said "three
+    /// of something"; these say which is which.
+    pub title_left: String,
+    pub title_center: String,
+    pub title_right: String,
+}
+
+impl TitleBar {
+    fn as_slots(&self) -> Vec<String> {
+        vec![self.title_left.clone(), self.title_center.clone(), self.title_right.clone()]
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Header {
-    /// Exactly 3 segments -- the real slot count, so the type enforces it
-    /// rather than a caller discovering the truncation at render time.
-    pub title_bar: [String; 3],
+    #[serde(flatten)]
+    pub title: TitleBar,
     pub big_font: String,
     pub current_value: String,
+}
+
+impl Header {
+    fn title_bar(&self) -> Vec<String> {
+        self.title.as_slots()
+    }
 }
 
 /// Footer layer (displayId 4 -- `menu_button`/tabs). Same stickiness as
@@ -478,9 +609,40 @@ pub struct Header {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Footer {
-    /// Exactly 5 tabs -- the real slot count (callout D in the official
-    /// manual: "Five menu buttons").
-    pub tabs: [String; 5],
+    /// The five tab labels, named for the physical buttons they sit above --
+    /// the SAME five this project calls `screen_button_0..4` as inputs
+    /// (`cc_name`) and as LEDs (`Led::ScreenButton`). One vocabulary for one
+    /// row of buttons, so "which tab" and "which button" are never a
+    /// translation step.
+    pub screen_button_0: String,
+    pub screen_button_1: String,
+    pub screen_button_2: String,
+    pub screen_button_3: String,
+    pub screen_button_4: String,
+}
+
+impl Footer {
+    fn tabs(&self) -> Vec<String> {
+        vec![
+            self.screen_button_0.clone(),
+            self.screen_button_1.clone(),
+            self.screen_button_2.clone(),
+            self.screen_button_3.clone(),
+            self.screen_button_4.clone(),
+        ]
+    }
+
+    /// All five set to the same thing -- used for the blank-placeholder
+    /// default, so the slot count lives in one place.
+    fn filled_with(v: &str) -> Footer {
+        Footer {
+            screen_button_0: v.to_string(),
+            screen_button_1: v.to_string(),
+            screen_button_2: v.to_string(),
+            screen_button_3: v.to_string(),
+            screen_button_4: v.to_string(),
+        }
+    }
 }
 
 /// Tracks what's actually been sent, so `hide_popup`/`hide_message` can
@@ -523,13 +685,11 @@ impl Default for DeviceState {
             last_message_text: None,
             lit_leds: std::collections::BTreeSet::new(),
             status_led: StatusLed::Off,
-            footer: Footer {
-                // 5 real (non-empty, so indexed_entries doesn't filter them
-                // out and skip the slot) but visually blank placeholders --
-                // we don't know what a caller wants shown here yet, and
-                // leaving stale text is worse than genuinely blank.
-                tabs: std::array::from_fn(|_| " ".to_string()),
-            },
+            // 5 real (non-empty, so indexed_entries doesn't filter them out
+            // and skip the slot) but visually blank placeholders -- we don't
+            // know what a caller wants shown here yet, and leaving stale text
+            // is worse than genuinely blank.
+            footer: Footer::filled_with(" "),
         }
     }
 }
@@ -578,10 +738,10 @@ impl DeviceState {
     /// way to dismiss Message or an open popup, since both get marked
     /// hidden here (a real switch clears them as a side effect, confirmed
     /// -- Thirteenth/Thirty-first findings).
-    pub fn switch_background(&mut self, bg: Background, title_bar: [String; 3]) -> Vec<Vec<u8>> {
-        let msgs = self.full_redraw(&bg, &title_bar);
+    pub fn switch_background(&mut self, bg: Background, title: TitleBar) -> Vec<Vec<u8>> {
+        let msgs = self.full_redraw(&bg, &title.as_slots());
         self.last_background = Some(bg);
-        self.header.title_bar = title_bar;
+        self.header.title = title;
         self.popup_visible = false;
         self.message_visible = false;
         msgs
@@ -602,7 +762,7 @@ impl DeviceState {
     fn full_redraw(&self, bg: &Background, title_bar: &[String]) -> Vec<Vec<u8>> {
         let t = bg.page_template();
         let mut msgs = switch_background_messages(bg, title_bar);
-        msgs.push(write_tabs(t, &self.footer.tabs));
+        msgs.push(write_tabs(t, &self.footer.tabs()));
         msgs.push(write_bigfont(t, &self.header.big_font));
         msgs.push(write_current_value(t, &self.header.current_value));
         msgs
@@ -614,10 +774,10 @@ impl DeviceState {
     /// matter beyond being *a* valid one) -- also remembered so every
     /// subsequent `switch_background`/`resend_body` keeps re-asserting it,
     /// instead of leaving it to whatever last wrote that slot.
-    pub fn set_footer(&mut self, tabs: [String; 5]) -> Vec<u8> {
+    pub fn set_footer(&mut self, footer: Footer) -> Vec<u8> {
         let t = self.last_background.as_ref().map(|b| b.page_template()).unwrap_or(16);
-        let msg = write_tabs(t, &tabs);
-        self.footer.tabs = tabs;
+        let msg = write_tabs(t, &footer.tabs());
+        self.footer = footer;
         msg
     }
 
@@ -696,7 +856,7 @@ impl DeviceState {
         let mut msgs = Vec::new();
 
         if let Some(bg) = &self.last_background {
-            msgs.extend(self.full_redraw(bg, &self.header.title_bar));
+            msgs.extend(self.full_redraw(bg, &self.header.title_bar()));
         }
 
         // Every known LED, explicitly on OR off -- not just the lit ones, so
@@ -736,9 +896,9 @@ impl DeviceState {
     /// reported bug ("hiding popup does not really work") when the real
     /// device's boot state was never reflected here. Not a device read-back
     /// (none exists) -- purely "trust the caller, they just wrote this".
-    pub fn seed_background(&mut self, bg: Background, title_bar: [String; 3]) {
+    pub fn seed_background(&mut self, bg: Background, title: TitleBar) {
         self.last_background = Some(bg);
-        self.header.title_bar = title_bar;
+        self.header.title = title;
         self.popup_visible = false;
         self.message_visible = false;
     }
@@ -787,8 +947,8 @@ impl DeviceState {
                 } else {
                     Background::Blank
                 };
-                let mut msgs = self.full_redraw(&bounce, &self.header.title_bar);
-                msgs.extend(self.full_redraw(bg, &self.header.title_bar));
+                let mut msgs = self.full_redraw(&bounce, &self.header.title_bar());
+                msgs.extend(self.full_redraw(bg, &self.header.title_bar()));
                 msgs
             }
             None => Vec::new(),
@@ -1037,23 +1197,34 @@ pub const STATUS_LED_CCS: &[u8] = &[99, 100, 101, 102];
 pub enum StatusLed {
     #[default]
     Off,
-    Position1,
-    Position2,
-    Position3,
-    Position4,
+    Status0,
+    Status1,
+    Status2,
+    Status3,
 }
 
 impl StatusLed {
     /// The CC to write 127 to for this state, or `None` for `Off` (which is
-    /// expressed by the clear message alone).
+    /// expressed by the clear message alone). Numbering is 0-based to match
+    /// the INPUT side's `status_led_0`..`status_led_3` (`cc_name`) for the
+    /// very same four CCs -- one vocabulary for one strip, rather than the
+    /// output calling them "position1..4" while the input calls them
+    /// "status_led_0..3".
     fn set_cc(self) -> Option<u8> {
         match self {
             StatusLed::Off => None,
-            StatusLed::Position1 => Some(STATUS_LED_CCS[0]),
-            StatusLed::Position2 => Some(STATUS_LED_CCS[1]),
-            StatusLed::Position3 => Some(STATUS_LED_CCS[2]),
-            StatusLed::Position4 => Some(STATUS_LED_CCS[3]),
+            StatusLed::Status0 => Some(STATUS_LED_CCS[0]),
+            StatusLed::Status1 => Some(STATUS_LED_CCS[1]),
+            StatusLed::Status2 => Some(STATUS_LED_CCS[2]),
+            StatusLed::Status3 => Some(STATUS_LED_CCS[3]),
         }
+    }
+
+    /// Same strip, named the same way the input side names it -- so a caller
+    /// can line up "which status LED lit" with "which status CC arrived"
+    /// without a translation table.
+    pub fn control_name(self) -> Option<String> {
+        self.set_cc().map(cc_name)
     }
 }
 
@@ -1582,7 +1753,7 @@ mod tests {
     /// NONE at all (`Menu`) -- the latter previously sent title_bar alone.
     #[test]
     fn switch_background_omits_body_fields_a_variant_doesnt_define() {
-        let title_bar: [String; 3] = ["T1".into(), "T2".into(), "T3".into()];
+        let title = TitleBar { title_left: "T1".into(), title_center: "T2".into(), title_right: "T3".into() };
 
         // Mixer defines names+values only (no pad_state/page_labels) --
         // title_bar + 2, not title_bar + all 4. Nullable per BodyFields'
@@ -1590,22 +1761,22 @@ mod tests {
         // template switch auto-clears ctrl_element_name (protocol.json,
         // confirmed) and the rest are assumed the same by analogy.
         let mixer = Background::Mixer {
-            knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
+            knob_1: Knob { name: format!("N1"), value: format!("V1") }, knob_2: Knob { name: format!("N2"), value: format!("V2") }, knob_3: Knob { name: format!("N3"), value: format!("V3") }, knob_4: Knob { name: format!("N4"), value: format!("V4") }, knob_5: Knob { name: format!("N5"), value: format!("V5") }, knob_6: Knob { name: format!("N6"), value: format!("V6") }, knob_7: Knob { name: format!("N7"), value: format!("V7") }, knob_8: Knob { name: format!("N8"), value: format!("V8") },
         };
-        assert_eq!(switch_background_messages(&mixer, &title_bar).len(), 3, "title_bar + names + values only");
+        assert_eq!(switch_background_messages(&mixer, &title.as_slots()).len(), 3, "title_bar + names + values only");
 
         // Menu/Reset/Blank define NO Body fields at all -- title_bar alone.
-        assert_eq!(switch_background_messages(&Background::Menu, &title_bar).len(), 1);
-        assert_eq!(switch_background_messages(&Background::Reset, &title_bar).len(), 1);
-        assert_eq!(switch_background_messages(&Background::Blank, &title_bar).len(), 1);
+        assert_eq!(switch_background_messages(&Background::Menu, &title.as_slots()).len(), 1);
+        assert_eq!(switch_background_messages(&Background::Reset, &title.as_slots()).len(), 1);
+        assert_eq!(switch_background_messages(&Background::Blank, &title.as_slots()).len(), 1);
 
         // PadView defines names+pad_state (no values/page_labels) -- a
         // different 2-of-4 subset, confirming this isn't hardcoded to
         // Mixer's particular pair.
         let pad_view = Background::PadView {
-            pads: std::array::from_fn(|i| Pad { name: format!("P{i}"), state: PadState::Default }),
+            pad_a1: Pad { name: "A1".into(), state: PadState::Default }, pad_a2: Pad { name: "A2".into(), state: PadState::Default }, pad_a3: Pad { name: "A3".into(), state: PadState::Default }, pad_a4: Pad { name: "A4".into(), state: PadState::Default }, pad_b1: Pad { name: "B1".into(), state: PadState::Default }, pad_b2: Pad { name: "B2".into(), state: PadState::Default }, pad_b3: Pad { name: "B3".into(), state: PadState::Default }, pad_b4: Pad { name: "B4".into(), state: PadState::Default }, pad_c1: Pad { name: "C1".into(), state: PadState::Default }, pad_c2: Pad { name: "C2".into(), state: PadState::Default }, pad_c3: Pad { name: "C3".into(), state: PadState::Default }, pad_c4: Pad { name: "C4".into(), state: PadState::Default }, pad_d1: Pad { name: "D1".into(), state: PadState::Default }, pad_d2: Pad { name: "D2".into(), state: PadState::Default }, pad_d3: Pad { name: "D3".into(), state: PadState::Default }, pad_d4: Pad { name: "D4".into(), state: PadState::Default },
         };
-        assert_eq!(switch_background_messages(&pad_view, &title_bar).len(), 3, "title_bar + names + pad_state only");
+        assert_eq!(switch_background_messages(&pad_view, &title.as_slots()).len(), 3, "title_bar + names + pad_state only");
     }
 
     /// show_popup/show_message/hide_popup/hide_message must ALL resend the
@@ -1618,9 +1789,9 @@ mod tests {
     fn show_and_hide_overlay_verbs_resend_the_full_body_state() {
         let mut state = DeviceState::default();
         let bg = Background::Mixer {
-            knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
+            knob_1: Knob { name: format!("N1"), value: format!("V1") }, knob_2: Knob { name: format!("N2"), value: format!("V2") }, knob_3: Knob { name: format!("N3"), value: format!("V3") }, knob_4: Knob { name: format!("N4"), value: format!("V4") }, knob_5: Knob { name: format!("N5"), value: format!("V5") }, knob_6: Knob { name: format!("N6"), value: format!("V6") }, knob_7: Knob { name: format!("N7"), value: format!("V7") }, knob_8: Knob { name: format!("N8"), value: format!("V8") },
         };
-        state.switch_background(bg, ["T1".to_string(), "T2".to_string(), "T3".to_string()]);
+        state.switch_background(bg, TitleBar { title_left: "T1".into(), title_center: "T2".into(), title_right: "T3".into() });
 
         // resend_body() bounces through a different template first (see its
         // doc comment) via full_redraw, which is: switch_background_messages
@@ -1651,7 +1822,7 @@ mod tests {
     #[test]
     fn resend_body_bounce_target_never_matches_the_real_background() {
         let mut state = DeviceState::default();
-        state.switch_background(Background::Blank, ["T1".to_string(), "T2".to_string(), "T3".to_string()]);
+        state.switch_background(Background::Blank, TitleBar { title_left: "T1".into(), title_center: "T2".into(), title_right: "T3".into() });
         state.show_popup(&["A".to_string()]);
         let msgs = state.hide_popup();
         // First message is the bounce's title_bar write -- byte index 7 is
@@ -1675,9 +1846,9 @@ mod tests {
     fn switch_background_and_resend_body_both_include_a_real_tabs_write() {
         let mut state = DeviceState::default();
         let bg = Background::Mixer {
-            knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
+            knob_1: Knob { name: format!("N1"), value: format!("V1") }, knob_2: Knob { name: format!("N2"), value: format!("V2") }, knob_3: Knob { name: format!("N3"), value: format!("V3") }, knob_4: Knob { name: format!("N4"), value: format!("V4") }, knob_5: Knob { name: format!("N5"), value: format!("V5") }, knob_6: Knob { name: format!("N6"), value: format!("V6") }, knob_7: Knob { name: format!("N7"), value: format!("V7") }, knob_8: Knob { name: format!("N8"), value: format!("V8") },
         };
-        let switch_msgs = state.switch_background(bg, ["T1".to_string(), "T2".to_string(), "T3".to_string()]);
+        let switch_msgs = state.switch_background(bg, TitleBar { title_left: "T1".into(), title_center: "T2".into(), title_right: "T3".into() });
         // full_redraw appends tabs/bigfont/current_value in that order after
         // switch_background_messages' own writes -- tabs is no longer
         // necessarily last (current_value is), so find it by displayId.
@@ -1827,6 +1998,65 @@ mod tests {
     /// `from_cc` must be the exact inverse of `cc()` for every named LED --
     /// two hand-written tables that can drift is precisely the bug this
     /// pairing exists to avoid.
+    /// The five buttons under the display are referred to THREE times in this
+    /// codebase -- as inputs (`cc_name` -> `screen_button_N`), as LEDs
+    /// (`Led::ScreenButton { index }`) and as footer tab labels
+    /// (`Footer::screen_button_N`). They are one row of five physical buttons,
+    /// so those had better stay the same five things. This locks that coupling
+    /// in code: rename or renumber one side and this fails, instead of the
+    /// three drifting apart silently while each looks locally fine.
+    #[test]
+    fn screen_button_vocabulary_is_shared_across_input_led_and_footer() {
+        for index in 0u8..=4 {
+            let cc = 106 + index;
+            // Input name and LED agree on which CC this button is.
+            assert_eq!(
+                Led::ScreenButton { index }.cc(),
+                Some(cc),
+                "Led::ScreenButton {{ index: {index} }} must be CC {cc}"
+            );
+            // The input name is `screen_button_N` (positions 3 and 4 carry a
+            // confirmed-behavior suffix, hence prefix rather than equality).
+            let name = cc_name(cc);
+            assert!(
+                name.starts_with(&format!("screen_button_{index}")),
+                "cc_name({cc}) = {name:?}, expected to start with screen_button_{index}"
+            );
+            assert_eq!(Led::ScreenButton { index }.control_name(), Some(name));
+        }
+
+        // And the Footer names its five slots after those same buttons, in the
+        // same order the wire expects them.
+        let footer = Footer {
+            screen_button_0: "zero".into(),
+            screen_button_1: "one".into(),
+            screen_button_2: "two".into(),
+            screen_button_3: "three".into(),
+            screen_button_4: "four".into(),
+        };
+        assert_eq!(footer.tabs(), vec!["zero", "one", "two", "three", "four"]);
+    }
+
+    /// Same idea for the status strip: the OUTPUT enum and the INPUT names
+    /// must describe the same four CCs with the same numbering. This is what
+    /// stops "position1..4" style drift from creeping back in on one side.
+    #[test]
+    fn status_led_vocabulary_matches_input_names() {
+        let states = [
+            (StatusLed::Status0, 0u8),
+            (StatusLed::Status1, 1),
+            (StatusLed::Status2, 2),
+            (StatusLed::Status3, 3),
+        ];
+        for (state, index) in states {
+            let cc = STATUS_LED_CCS[index as usize];
+            assert_eq!(state.set_cc(), Some(cc));
+            assert_eq!(cc_name(cc), format!("status_led_{index}"));
+            assert_eq!(state.control_name(), Some(format!("status_led_{index}")));
+        }
+        assert_eq!(StatusLed::Off.set_cc(), None, "Off is the clear message alone");
+    }
+
     #[test]
     fn led_cc_round_trips_both_ways() {
         let all: Vec<Led> = (1..=8).map(|index| Led::Select { index })
@@ -1849,12 +2079,12 @@ mod tests {
         let mut state = DeviceState::default();
         state.switch_background(
             Background::Mixer {
-                knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
+                knob_1: Knob { name: format!("N1"), value: format!("V1") }, knob_2: Knob { name: format!("N2"), value: format!("V2") }, knob_3: Knob { name: format!("N3"), value: format!("V3") }, knob_4: Knob { name: format!("N4"), value: format!("V4") }, knob_5: Knob { name: format!("N5"), value: format!("V5") }, knob_6: Knob { name: format!("N6"), value: format!("V6") }, knob_7: Knob { name: format!("N7"), value: format!("V7") }, knob_8: Knob { name: format!("N8"), value: format!("V8") },
             },
-            ["T1".to_string(), "T2".to_string(), "T3".to_string()],
+            TitleBar { title_left: "T1".into(), title_center: "T2".into(), title_right: "T3".into() },
         );
         state.set_led(Led::Play, true);
-        state.set_status_led(StatusLed::Position2);
+        state.set_status_led(StatusLed::Status1);
 
         let msgs = state.full_transmission();
 
@@ -1871,7 +2101,7 @@ mod tests {
         // what the device was showing before.
         let status_msgs: Vec<_> = msgs.iter().filter(|m| m.len() == 3 && STATUS_LED_CCS.contains(&m[1])).collect();
         assert_eq!(status_msgs.len(), 2, "clear then set");
-        assert_eq!(status_msgs[1][1], 100, "Position2 is CC 100");
+        assert_eq!(status_msgs[1][1], 100, "Status1 is CC 100 -- same name the input side uses");
         assert_eq!(status_msgs[1][2], 127);
 
         // And the Background/Header/Footer went out too (SysEx, not CC).
@@ -1953,19 +2183,16 @@ mod tests {
     #[test]
     fn fader_split_scatters_paired_labels_into_template_18_slot_order() {
         let bg = Background::FaderSplit {
-            faders: std::array::from_fn(|i| StackedLabel {
-                top: format!("T{i}"),
-                bottom: format!("B{i}"),
-            }),
+            fader_1: StackedLabel { top: format!("T1"), bottom: format!("B1") }, fader_2: StackedLabel { top: format!("T2"), bottom: format!("B2") }, fader_3: StackedLabel { top: format!("T3"), bottom: format!("B3") }, fader_4: StackedLabel { top: format!("T4"), bottom: format!("B4") }, fader_5: StackedLabel { top: format!("T5"), bottom: format!("B5") }, fader_6: StackedLabel { top: format!("T6"), bottom: format!("B6") }, fader_7: StackedLabel { top: format!("T7"), bottom: format!("B7") }, fader_8: StackedLabel { top: format!("T8"), bottom: format!("B8") },
         };
         let names = bg.body_fields().names.expect("FaderSplit defines names");
         assert_eq!(names.len(), 16);
-        // Left group (faders 0-3): tops at 0-3, bottoms at 4-7.
-        assert_eq!(&names[0..4], &["T0", "T1", "T2", "T3"]);
-        assert_eq!(&names[4..8], &["B0", "B1", "B2", "B3"]);
-        // Right group (faders 4-7): tops at 8-11, bottoms at 12-15.
-        assert_eq!(&names[8..12], &["T4", "T5", "T6", "T7"]);
-        assert_eq!(&names[12..16], &["B4", "B5", "B6", "B7"]);
+        // Left group (fader_1..fader_4): tops at slots 0-3, bottoms at 4-7.
+        assert_eq!(&names[0..4], &["T1", "T2", "T3", "T4"]);
+        assert_eq!(&names[4..8], &["B1", "B2", "B3", "B4"]);
+        // Right group (fader_5..fader_8): tops at 8-11, bottoms at 12-15.
+        assert_eq!(&names[8..12], &["T5", "T6", "T7", "T8"]);
+        assert_eq!(&names[12..16], &["B5", "B6", "B7", "B8"]);
     }
 
     #[test]
