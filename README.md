@@ -10,6 +10,6 @@ Your controller hardware of choice, in your DAW and plugins of choice.
 ... On your operating system, and cpu architecture of choice.
 
 # details
-> See `DESIGN.md` for a WIP architecture and general approach.
-> See `PLAN.md` for the project roadmap, goals, and next steps.
+See `DESIGN.md` for a WIP architecture and general approach.
+See `PLAN.md` for the project roadmap, goals, and next steps.
 
