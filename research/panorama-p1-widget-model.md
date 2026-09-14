@@ -1,0 +1,346 @@
+# Panorama P1 widget model — working document
+
+Distinct from `panorama-p1-protocol-notes.md` (narrative findings, chronological) and
+`protocol.json` (structured byte-level facts): this file is the **model** we're building
+*from* those findings, built by re-reading what's already established rather than running new
+hardware tests — nearly every cell of the matrix below turned out to already have direct
+evidence somewhere in the findings log; the gap was synthesis, not data. Started because
+repeated ad-hoc testing kept re-deriving pieces of this model instead of building on a shared
+one.
+
+## Two orthogonal axes
+
+Every addressable "thing" on this device sits somewhere on two independent axes: **which
+layer** it belongs to, and **what kind of mutability** it has.
+
+### Axis 1: layer
+
+| Layer | Members | Behavior |
+|---|---|---|
+| **Header** (top strip) | `title_bar`(1), `big_font`(2), `current_value`(3) | State-class, template-independent. Survives a Background switch untouched (Fourteenth finding), confirmed unaffected across **every** Background tested (Tenth finding's per-template probes). |
+| **Footer** (bottom strip) | `menu_button`(4) | Same State-class persistence as Header, kept as its own row since it's a physically separate strip (bottom of screen vs. top) that happens to share Header's mutability — "Chrome" as a single lumped category was conflating position with mutability class; split per direct request. |
+| **Background** | `page_template`: see the full table below | Mutually exclusive — exactly one is "active." Switching to a different one clears Body, whether or not the switching write touches it (Fourteenth finding). |
+| **Body** (the Background's own content area) | `ctrl_element_name`(6), `ctrl_element_value`(7), `pad_state`(0), `page_labels`(5) | Content-class: cleared by any real Background switch. Rendered differently by every Background (that's *what makes* a Background visually distinct) — see table. `page_labels` renders "near the first knob position" (Nineteenth finding), i.e. inside the Body area, not Header/Footer, despite being chrome-*adjacent* in earlier framing. |
+| **Overlay** | popup menu (displayId 8, hardcoded `page_template=0`) | Draws on top of whatever Background+Header+Footer+Body is showing, without changing which Background is "official." Confirmed to overlay `drum_pads`(21) cleanly without disturbing it (Twenty-seventh finding). **Its own `Esc`/`Enter` buttons render through the Footer's own displayId (4, `menu_button`) rather than an independent slot** (Thirty-eighth finding) -- so Overlay isn't purely additive on top of Footer, it temporarily *owns* it, and dismissing the popup requires re-asserting Footer content, not just Background/Body. |
+| **Message** (exclusive mode) | `pageTemplate=1` one-shot write | Own separate SysEx pathway (Seventh finding), not a compose-path Background at all. Used dozens of times this whole project as the "force back to a clean state" trick, successfully, from every kind of prior state — confirms Message suppresses Header/Footer/Background/Body regardless of what preceded it. **Its interaction with an open Overlay is unsettled, contradictory evidence**: the Thirty-first finding saw the popup's highlighted bars still drawn on top of "hacpad" text (Message *below* Overlay in z-order); a later, cleaner test (`verb_test overlaytest`: switch_background → show_popup → show_message, in that exact order) showed Message rendering **completely alone**, no popup bleed-through at all. Not reconciled — may be order/prior-state-dependent (the earlier test's popup may have been "stale" from much earlier in that session rather than freshly shown right before Message, unlike the later test). Treat as open, not settled either direction. |
+
+**Background table** (all confirmed on hardware, Tenth/Fifteenth/Sixteenth findings):
+
+| id | Content widget shape | Chrome behavior |
+|---|---|---|
+| 0 | reset sentinel — ignores Content writes entirely, falls back to native default fader view | title bar still works |
+| 2 | `menu` — body untested directly, but displayId 4 (menu_button) confirmed to relabel independent of it | title bar untouched |
+| 3 | `transport_launcher` — `L:`/`R:` locator bars + a 2×4 grid of `ctrl_element_name` | title bar untouched |
+| 4 | `list` — 1 fader + vertical bulleted list (5 visible entries, hard cap) | title bar untouched |
+| 5 | `grid5` — plain 2×4 button grid, no fader/knob widgets | title bar untouched |
+| 6 | `list_highlighted` — list with one row shown selected/highlighted, row numbers on the left | title bar untouched |
+| 7 | `scene_buttons` — 4 buttons `S1`-`S4` + a `B` indicator | title bar untouched |
+| 8/9 | `browser_list` — vertical list of up to 8 rows, each paired with a `Pre` label; 8 and 9 render indistinguishably | title bar untouched |
+| 16/17 | `mixer` — 4×2 knob grid (default page on connect); 16/17 indistinguishable | title bar untouched |
+| 18 | `instrument_layer_container` — 8 faders split into two groups of 4, 16 `ctrl_element_name` slots (2 stacked per fader) | title bar untouched |
+| 19/20 | `faders_row` — 8 faders, one continuous row; 19/20 indistinguishable | title bar untouched |
+| 21 | `drum_pads` — 4×4 pad grid, rows A-D, all 16 individually labelable | title bar untouched |
+| 22 | `drum_pads_3row` — genuinely distinct from 21 (Sixteenth finding): 3×4 grid, rows A-C only, no 4th row at all | title bar untouched |
+
+So the Chrome × Background and Content × Background interactions are **fully characterized**
+— every Background was individually probed and Chrome was confirmed identical every single
+time. What was never tabulated as a matrix is Overlay × Background and Message × Background.
+
+### Axis 2: mutability class
+
+| Class | Members | What "unset" means | How to actually clear it |
+|---|---|---|---|
+| **1. State** | Chrome, Content, independent LEDs (select/menu buttons, Play/Record/Loop/Mute/Solo/etc.) | A real, stable "current value" exists on the device. Not sending it leaves it as-is. Idempotent. | Send the new value. |
+| **2. Select-or-clear register** | Status LED strip (CC 99-102, Thirty-fifth finding) | One of N positions active, or none. A genuine clear primitive exists. | Write 127 to the CC for the desired position, or 0 to *any* of the group's CCs to clear all. **Must be sent as clear-then-set as one atomic unit** — diffing per-CC independently breaks it. |
+| **3. Trigger-only, no clear primitive** | Message, popup menu (Overlay layer), popup highlight (CC 111) | No device-tracked "current value" to diff against. Every send is a fresh one-shot "show this now." | **No targeted clear exists.** Only: (a) never send it, or (b) a real Background switch, which resets Background+Content (and, per the z-order finding above, Message — but not a currently-open popup, which needs its own switch too since it's a *different* trigger). The popup highlight is the one **partial exception**, where a targeted clear does exist after all: no *value* on the highlight CC clears it (0/127/255 all leave the last-set row highlighted, Thirty-seventh finding), but **re-sending the popup's own content does** — photographed with the popup still open and the bar gone (Fortieth finding). So `clear_popup_highlight` is a real verb, implemented by repopulating rather than by any "none" value. |
+
+**The correction this document exists to capture**: the simulator's "differential push"
+architecture (diff against last-sent value, resend only on change) implicitly treats
+everything as Class 1. `dismissOverlay()`, as originally built, doesn't hide an overlay — it
+fires the *Background-switch verb* (see below) and the overlay vanishing is a side effect of
+that, not a targeted "hide."
+
+## Verb layer: confirmed on hardware
+
+`switch_background_messages()` (lib.rs) and its `Background` enum are no longer just a
+design on paper — three variants tested directly against real hardware via
+`src/bin/verb_test.rs` and photographed (after fixing an unrelated camera-tuning problem
+that was initially misread as a rendering bug — the webcam's exposure was clipping the
+lighter end of the pad grid's own brightness gradient to solid white; resolved with
+live manual tuning via the new camera-control panel, not a device/protocol issue):
+
+- **`Mixer`**: 8 knobs, `param_names`/`param_values` both rendered correctly
+  (CUT/RES/.../MIX with 1.2k/45%/.../wet).
+- **`PadView`**: all 16 pad slots individually labeled correctly (P1-P16, right rows:
+  A=1-4, B=5-8, C=9-12, D=13-16).
+- **`TransportLauncher`**: `loop_left`/`loop_right` rendered as the `L:`/`R:` bars,
+  `labels` rendered as the 2×4 grid beneath.
+
+Not yet exercised: `FaderSplit`, `FaderRow`, `List`, `Grid`, `PadView3Row`, `Menu`,
+`ListHighlighted`, `SceneButtons`, `BrowserList`, `Reset`. High confidence these also work
+given the schema was derived directly from each one's own confirmed hardware probe
+(Tenth/Fifteenth/Sixteenth findings) and the lowering logic is uniform, but not
+independently verified yet. Also added `Background::Blank` (reuses template 5/`Grid`
+with nothing written to it) as a genuine "nothing showing" Background, distinct from
+`Reset`(0) which falls back to the device's own native default view instead of looking
+blank -- not yet independently tested either.
+
+### Show/hide semantics for Trigger-only members (`DeviceState`)
+
+Per the mutability-class table, Message and the popup have no clear primitive of their
+own -- the only way to make either stop showing is a real Background switch. Added
+`DeviceState` (lib.rs), a small in-memory tracker (there is no read-back from the device at
+all, confirmed repeatedly -- this struct **is** "current state", not a mirror of it) that:
+- Remembers `last_background` + the title bar it was switched with, so `hide_popup()`/
+  `hide_message()` can restore *whatever was actually there*, not a hardcoded fallback --
+  directly addressing "we may want to draw the message over a non-blank background" (i.e.
+  Message and the currently-active Background are controlled independently; `Blank` is
+  just one Background a caller can choose, never forced by the message/popup verbs).
+- Marks both `popup_visible` and `message_visible` false whenever a real
+  `switch_background` happens (confirmed: a real switch clears both as a side effect), and
+  `hide_popup()`/`hide_message()` are each other's twin for this reason -- both restore
+  `last_background`, both mark both flags false, since there's no way to clear just one.
+- No-ops (empty message vec) when asked to hide something already hidden.
+
+**Verified directly on hardware** (`verb_test overlaytest`): `switch_background(Mixer)` →
+`show_popup` → `show_message` → `hide_message`. Message rendered cleanly (see the z-order
+note in the layer table above -- this specific run showed NO popup bleed-through, contrary
+to the Thirty-first finding). `hide_message()` correctly restored the full Mixer view
+(all 8 knobs, names and values both correct) with the popup also gone, matching the model
+exactly.
+
+**Root-caused a real bug this session**: the webcam-viewer's *raw* dismiss path
+(`dismissOverlay()` in index.html) only ever re-sent `title_bar` -- never a Background's own
+content field -- so unticking the popup/message checkboxes visibly did nothing. Exactly the
+"page_template change is a silent no-op unless piggybacked on a real content write" behavior
+this section already documented; `DeviceState` never had this problem because
+`switch_background_messages` always sends both. `DeviceState` was proven correct in
+`verb_test` but had never actually been reachable from the WebSocket bridge until this
+session -- `service.rs` now holds one and exposes it via a second, additive
+`{"semantic": {...}}` envelope on the same socket (raw `ScreenUpdate` still works unchanged,
+by deliberate choice -- see the file's own top doc comment: "we lose something if not
+allowing the raw perspective"). index.html's new "Semantic commands" panel calls this for
+Show/Hide Popup and Show/Hide Message, and confirmed correct end-to-end this session
+(scripted WS client, real hardware): switchBackground → showPopup → hidePopup (restores
+Mixer, clears popup) → showMessage → hideMessage (restores Mixer again). The raw checkboxes
+above are intentionally left with their old, honest limitation rather than papered over.
+
+## Interaction matrix — Background × Overlay/Message
+
+Confidence key: **D** = directly tested and photographed. **I** = not directly tested for this
+specific cell, but inferable with high confidence from the *mechanism* (the popup is hardcoded
+to `page_template=0` and drawn as a fixed-position overlay box regardless of what's
+"officially" active underneath, so nothing about its rendering logic depends on which
+Background happens to be showing; Message is its own totally separate SysEx pathway with no
+Background-conditional logic anywhere in source). **?** = genuinely unknown.
+
+| Background | + popup overlay | + Message |
+|---|---|---|
+| Any of the 13 (0,2-9,16-22) | **I** — renders as the same fixed-position box regardless, per the mechanism; the only real variable is *cosmetic overlap* with whatever content that Background draws in the same screen region (confirmed only for `drum_pads`/21 — box covered part of rows C/D; a Background whose own content lives in that same region, e.g. `browser_list`'s vertical list, might visually collide more than `drum_pads` did — worth a look if it ever matters, not worth blocking the model on) | **I** — Message is Background-agnostic by construction; its repeated successful use as a universal "reset to clean" trick across every kind of prior state this whole project *is* the practical confirmation |
+| `drum_pads`(21) specifically | **D** (Twenty-seventh finding) | — |
+
+**Answer to "does a combination render inconsistently, and is it worth allowing"**: based on
+the mechanism, no combination is expected to be structurally inconsistent — Overlay and
+Message are both designed to be Background-agnostic. The only realistic failure mode is
+*cosmetic* (the popup box visually overlapping content that a specific Background also wants
+that screen region for), which is a rendering-quality question, not a protocol question, and
+not worth pre-emptively blocking any combination over.
+
+## Verbs — the operations the model actually implies
+
+This is the payoff: instead of a pile of independently-diffed fields, the device exposes
+exactly these operations. Everything above exists to justify why these are the right verbs
+and not others.
+
+1. **`switch_background(bg, title: TitleBar)`** — sets the active Background AND resupplies its
+   own Body content in one call (`Background::body_fields()`, nullable per field — a variant
+   that doesn't define a Body field omits that write, trusting the device's confirmed auto-clear
+   rather than forcing a blank one).
+
+   **Every field is enumerated and named, never positional.** `Mixer` takes `knob_1..knob_8`,
+   `PadView` takes `pad_a1..pad_d4` (the device prints those row letters A-D down the side of
+   the grid itself, so the field name points at a pad you can physically touch), `TitleBar`
+   takes `title_left`/`title_center`/`title_right` (confirmed [red, blue, red] on hardware).
+   A fixed-size array was still positional — `tabs[2]` never said *which* slot that is — so the
+   arrays are gone wherever the hardware has a fixed, nameable set of slots. `Vec` survives in
+   exactly two places, where the list is genuinely open-ended: `ListHighlighted` and
+   `BrowserList`. Also always resends the four sticky Chrome fields
+   (title_bar/big_font/current_value/tabs, `full_redraw`) unconditionally, since those are
+   confirmed to survive a switch untouched -- meaning an overlay drawn over them leaves stale
+   content there until something explicitly rewrites them (Thirty-eighth finding: this is
+   exactly how a popup's own Esc/Enter buttons got permanently stuck).
+2. **`set_footer(Footer)` / `set_header_big_font(text)` / `set_header_current_value(text)`** —
+   `Footer`'s five slots are named `screen_button_0..4` after the physical buttons they label —
+   the SAME five this project calls `screen_button_N` as inputs and `Led::ScreenButton` as LEDs.
+   That three-way coupling is locked by a test
+   (`screen_button_vocabulary_is_shared_across_input_led_and_footer`), not by comment, so
+   renaming one side fails the build rather than letting the three drift apart while each still
+   looks locally fine. Same for the status strip
+   (`status_led_vocabulary_matches_input_names`) —
+   the three independently-settable Chrome fields, named consistently after the Header/Footer
+   layer split (`title_bar` is set via `switch_background` itself, as part of `Header`).
+   `DeviceState` stores these as `header: Header { title_bar, big_font, current_value }` and
+   `footer: Footer { tabs }` structs, also the shape `DeviceSnapshot`/the WS wire protocol use
+   (`{"header": {...}, "footer": {...}}`, not flat fields). Safe to call anytime regardless of
+   Background; remembered so every subsequent `switch_background`/overlay show-or-hide keeps
+   re-asserting them.
+3. **`show_message(text)` / `hide_message()`** — real show/hide pair now (not one-shot-only):
+   `hide_message()` bounces through a different `page_template` value first (same reasoning as
+   `hide_popup`) then fully redraws whatever Background was last active, including Chrome.
+   Resending the SAME template value was confirmed NOT to count as a real switch on this
+   device (Thirty-eighth finding) -- bouncing is required, not optional.
+4. **`show_popup(items)` / `set_popup_highlight(row)` / `clear_popup_highlight()` / `hide_popup()`** — same real show/hide
+   pair, independent of `switch_background`'s own target (the popup is always hardcoded to
+   `page_template=0` internally). No *value* on the highlight CC clears it (any value tried
+   either moves it to another valid row or is ignored) -- but `clear_popup_highlight()`
+   achieves it anyway by re-sending the popup's content, confirmed on hardware with the popup
+   left open (Fortieth finding).
+5. **`set_led(led: Led, on)`** — Class 1, one named LED at a time (`Led::Play`,
+   `Led::Select { index }`, ...), named for the control it lights rather than by CC, since
+   every one shares its CC with that control's own button input. Returns `None` for an
+   out-of-range family index rather than addressing an unrelated CC.
+6. **`set_status_led(position: Option<1..=4>)`** — Class 2, already implemented as
+   `status_led_messages` (clear-then-set as one unit).
+7. **`set_cursor_volume(0..=1023)`** — the segmented CC 15/47 pair.
+
+## Session verification — real read-back, not just documentation
+
+Direct answer to "the schema has no error/rejection modeling at all": partially closed.
+Found (and unit-tested against the exact live-captured bytes) that the device replies to
+`0x09`-family lifecycle SysEx specifically with an ACK -- identical bytes except the
+manufacturer sub-id (`0x01`→`0x02`, host-to-device→device-to-host) and the final content
+byte decremented by 1. Confirmed directly (separate live test) that `0x08`-family lifecycle
+commands and ordinary `0x06` compose writes get **no** reply at all -- so this cannot verify
+an arbitrary content write, only whether a session got established.
+
+`expected_ack`/`is_expected_ack` (lib.rs) implement this; `service.rs`'s `Device::connect()`
+now opens a brief input connection, sends INIT_2, and waits up to 400ms for the matching ACK
+before proceeding -- `session_verified: bool` on `Device`, logged either way ("Session
+verified: device ACKed INIT_2." or a warning explaining the write-may-be-silently-ignored
+risk). This is the first piece of the "session invalidation is completely unmodeled" gap
+that's actually closed: we can now know, at startup, whether the device is really listening,
+rather than assuming every write works. **Still open**: nothing currently re-verifies
+mid-session (a session could still go bad after startup and nothing would notice until a
+write visibly fails to render), and there's still no way to verify an ordinary content write
+landed -- only the lifecycle handshake itself.
+
+## Device → host: input semantics (the other half of the bridge)
+
+Everything above this line is one direction only: host writes, device renders. Flagged as a
+real gap ("we have NOT worked on the semantics for values flowing FROM the device") because it
+was true — physical fader/encoder/button input had a confirmed byte-level decode (`main.rs`,
+`decode_cc`/`cc_name`/`cc_kind`), but it lived only in a demo binary that printed to stdout; the
+actual persistent bridge (`service.rs`, the one thing anything else talks to) had **no input
+code at all**. Partially closed this session:
+
+- `CcKind`/`cc_name`/`cc_kind`/`InputEvent`/`decode_cc` moved into `lib.rs` — shared, not a
+  binary-local copy — so `service.rs` (or anything else) can use the same confirmed decode
+  `main.rs` already had, without re-deriving or drifting from it.
+- `service.rs` now opens a **permanent** MIDI input connection (`start_input_listener`,
+  distinct from `Device::connect()`'s temporary ACK-verification one, which sends INIT_2 and
+  drops itself before this starts), decodes every incoming Control Change, and keeps the latest
+  decoded value per control name (`LastInput`, keyed by `cc_name()` — `"fader_3"`,
+  `"jog_wheel"`, etc.) in shared memory for as long as the process runs.
+- A newly-connecting WebSocket client is now handed that snapshot as
+  `{"inputSnapshot": {...}}`, a separate message from the existing screen-state sync, so an
+  existing client that doesn't know the key (index.html doesn't yet) just ignores it.
+- `InputEvent` now derives `Serialize` (`#[serde(tag = "kind")]`), so `inputSnapshot` carries
+  real structured events (`{"kind":"Fader","cc":3,"name":"fader_4","value":85,
+  "normalized":0.669...}`) instead of a Debug-formatted string -- index.html has a read-only
+  panel rendering it (generic per `kind`, not per named control). Spot-checked in lib.rs against
+  a handful of CCs this project directly confirmed live earlier (fader 1, pan encoder 1, shift,
+  play), not the whole map — same "check real facts, not the implementation against itself"
+  reasoning as the ACK test.
+- **Deliberately kept independent of `Background`/`DeviceState`**, per direct instruction: "I do
+  not know yet if it makes sense to map them to what's currently displayed on the screen...
+  perhaps just semantically what they ARE on the actual hardware." `InputEvent` names a
+  control by its own hardware identity (`fader_3`, `pan_encoder_5`, `play`) and nothing else —
+  no coupling to whatever Background is currently shown. Not a gap to fill in; a considered
+  choice, until/unless a screen-mapping is actually wanted.
+- **`InputState` — the input-side mirror of `DeviceState`**, per direct instruction ("the input
+  can also have a state. remember what value each semantical input's last value is" / "the
+  mapping from cc to semantical input is the first step"): `decode_cc` gives the semantic
+  identity (step one); `InputState::observe(cc, value)` wraps it and remembers a single
+  number per control name, keyed the same way (`fader_3`, `shift`, ...). Fader/Button map
+  straightforwardly (absolute 0..=127; 127/0 for pressed/released). **Encoders store the LAST
+  DELTA, not a position** — corrected per direct instruction ("do not accumulate their value!
+  instead, show the last diff"). An earlier version accumulated deltas into a clamped 0..=127
+  "soft position"; that was *our invention*, not a hardware fact, and is gone. These are
+  endless relative controls with no position to report, now **confirmed empirically** rather
+  than assumed: replaying 301 real encoder events across all 17 of them (8 pan, 8 param, jog
+  wheel) found only `+3` and `-3`, both directions, nothing else — so one detent is ±3, not
+  ±1, and there is never an absolute sweep like a fader produces. `service.rs`'s permanent
+  input listener calls `observe` directly instead of hand-rolling its own
+  HashMap<String, Value>, so `InputState` really is the one place this state lives, same as
+  `DeviceState` on the output side.
+
+**Still open / NOT done, to avoid overclaiming**:
+
+- **Still no TRUE server push to already-connected clients** — `handle_client`'s per-client
+  loop only reads (`socket.read()`, blocking) and this process's `tungstenite` is synchronous,
+  so a writer channel per client (needed for real push) risks two threads interleaving frame
+  bytes on the same socket, a protocol hazard not just an inconvenience. Worked around for
+  input specifically: a client can send `{"queryInput": true}` anytime and get a fresh
+  `inputSnapshot` back over the same request/reply loop every other message already uses;
+  index.html now polls this every 300ms, which feels live even though it technically isn't.
+  Screen-state edits from another tab still have no such workaround and remain
+  connect-time-only.
+- **The F-Keys button (CC 99) drives a device-native page, not our SysEx display at all** (see
+  `f_keys`'s doc comment in lib.rs) — a reminder that not every physical control's effect is
+  reachable or overridable through this MIDI-CC decode path.
+- **Much of the CC map is now cross-checked against the OFFICIAL Nektar manual's labeled panel
+  diagram** (Thirty-ninth finding), not only the third-party Bitwig driver's JS. Confirmed by
+  replaying the full historical input log against that diagram: faders (0–7/14), the Select
+  family (16–23), both encoder banks (48–55 pan, 64–71 param), the jog wheel (111), and the
+  whole transport row (80–89) — all sequential, no collisions, no `cc_N` fallthrough. **Two
+  entries were genuinely reversed and are now fixed** (CC 90 = `mode`, CC 103 = `f_keys`,
+  each confirmed by a deliberate live press photographed the instant its CC arrived), one was
+  retracted (CC 99, no longer claimed to be `f_keys`), and one pair renamed by elimination
+  (91/92 = `track_minus`/`track_plus`). Still NOT individually pressed-and-confirmed: CC
+  100–102/104–105, CC 97, the 91/92 ordering, and the patch_minus-vs-patch_plus split. Treat
+  those specific branches as "best current attribution," not hardware-verified.
+- **A physical silkscreen label and a DAW-side semantic can disagree, and `cc_name` deliberately
+  uses the silkscreen.** The clearest case: CC 90 is printed "Mode" on the unit, while the
+  Bitwig driver reassigns that same button to overdub/automation-write. Both are "true" at
+  different layers — this naming layer is the hardware identity ("what the control IS"), per
+  the standing decision to keep input semantics screen- and DAW-independent.
+- **Buttons are decoded as bare press/release (127/0), not debounced or edge-detected** — a
+  held button re-sends 127 repeatedly on some controls (not characterized here); nothing
+  distinguishes "pressed" from "still pressed."
+- **`cc_kind`'s own ranges have a small gap**: CC 104 (`surface_status`) and 105
+  (`automation_write`) both have real names from `cc_name` but fall outside every range
+  `cc_kind` checks, so they decode as `InputEvent::Unknown` despite being named -- surfaced by
+  `known_input_controls()` (2 of 65 entries land in the UI's "Unrecognized" group). Not fixed
+  reflexively: whether they're genuinely buttons (127/0) has never been directly confirmed live
+  (see the `cc_name` comments' own hedging on both), so reclassifying them without that
+  confirmation would be exactly the kind of unverified assumption this project keeps correcting
+  itself on elsewhere.
+
+## Open questions this model doesn't answer yet
+
+- ~~Does `page_labels` behave as Content or chrome?~~ — resolved: confirmed Content
+  (auto-cleared by a genuine Background switch with no explicit write needed), same as
+  `ctrl_element_name`. Directly tested (not just assumed by analogy this time): wrote
+  `page_labels` via `TransportLauncher`, switched to `Mixer` (which never defines
+  `page_labels` at all), photographed the old text genuinely gone.
+- Cosmetic overlap between the popup box and a Background's own content region, for
+  Backgrounds other than `drum_pads` — low priority, not a correctness question.
+- Does the popup's own pagination (>8 items, `offset` stepping) interact with `switch_background`
+  at all, or is it purely an Overlay-layer concern reachable only via `show_popup`?
+- Message-vs-popup z-order is still contradictory (see the layer table) — not re-isolated yet.
+- 10 of 13 `Background` variants remain schema-only, never exercised through the verb layer.
+- No mid-session re-verification exists yet — only a one-shot check at `Device::connect()`.
+- The raw and semantic perspectives (service.rs's `ScreenUpdate`/`apply()` vs `DeviceState`)
+  are deliberately never reconciled — a raw-panel edit doesn't update `device_state`, so a
+  semantic `hidePopup`/`hideMessage` after mixing the two can restore a Background that no
+  longer matches what a raw edit put on screen. Boot state is seeded correctly (Thirty-seventh
+  finding), but nothing keeps the two in sync after that.
+- ~~Residual blank button outlines after hiding a popup~~ — root-caused and fixed: the
+  popup's own `Esc`/`Enter` buttons share the Footer slot (displayId 4, `menu_button`/tabs)
+  with the normal tab row, which nothing was resending. `DeviceState` now tracks/resends its
+  `footer: Footer` field alongside every Background write. Confirmed clean on hardware
+  (Thirty-eighth finding, protocol notes).
+- Footer (`tabs`) now defaults to 5 blank placeholders and is fully caller-controllable
+  (`set_tabs`/`SetTabs`), but nothing has driven real tab labels through this path yet —
+  untested whether a Background switch's bounce-then-restore sequence looks visually
+  jarring (two full-screen flips) if real (non-blank) tab content is showing throughout.

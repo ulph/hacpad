@@ -1,0 +1,1380 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Panorama P1 debug view</title>
+<style>
+  html, body { margin: 0; background: #111; color: #ddd; font-family: monospace; }
+  #feed { display: block; max-width: 100vw; }
+
+  #camera-controls { padding: 8px 16px; font-family: sans-serif; max-width: 480px; }
+  #camera-controls h3 { margin: 4px 0 6px; font-size: 13px; color: #9cf; }
+  .cam-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #aaa; margin: 3px 0; }
+  .cam-row label { flex: 0 0 180px; }
+  .cam-row input[type=range] { flex: 1; }
+  .cam-row .cam-val { flex: 0 0 50px; text-align: right; color: #eee; font-family: monospace; }
+  .cam-row input[type=checkbox] { width: auto; }
+
+  #simulator { padding: 16px; display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; font-family: sans-serif; }
+
+  /* --- the mocked-up device screen -------------------------------- */
+  #screen-wrap { flex: 0 0 auto; }
+  #screen {
+    width: 320px; height: 240px; background: #05070a; border: 3px solid #444;
+    border-radius: 4px; overflow: hidden; display: flex; flex-direction: column;
+    font-family: monospace; box-shadow: 0 0 12px rgba(0,0,0,.6);
+  }
+  #bigfont-row { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 6px; background: #05070a; }
+  #bigfont { font-size: 15px; font-weight: bold; color: #fff; letter-spacing: 1px; }
+  #paramval { font-size: 12px; color: #9a9a9a; } /* displayId 3, paired with bigfont */
+  #pagelabels { font-size: 9px; color: #6a8; padding: 0 6px 2px; background: #05070a; min-height: 11px; } /* displayId 5 */
+  #titlebar { display: flex; height: 20px; }
+  #titlebar .seg {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: bold; color: #fff; overflow: hidden; white-space: nowrap;
+  }
+  #titlebar .seg.red { background: #c0392b; }
+  #titlebar .seg.blue { background: #2a5da8; }
+  #content { flex: 1; padding: 6px; overflow: hidden; }
+
+  /* knob layout */
+  .knob-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 4px; height: 100%; align-content: center; }
+  .knob { text-align: center; font-size: 9px; }
+  .knob .dial { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #ccc 60%, #999); margin: 0 auto 3px; position: relative; }
+  .knob .dial::after { content: ''; position: absolute; top: 3px; left: 50%; width: 2px; height: 8px; background: #333; transform: translateX(-50%) rotate(20deg); transform-origin: bottom; }
+  .knob .val { color: #9a9a9a; }
+  .knob .name { color: #fff; }
+
+  /* fader layout */
+  .fader-row { display: flex; height: 100%; align-items: flex-end; gap: 4px; padding-bottom: 4px; }
+  .fader-row.split { gap: 10px; }
+  .fader-row.split .fader-group { display: flex; gap: 4px; }
+  .fader { flex: 1; display: flex; flex-direction: column; align-items: center; font-size: 9px; }
+  .fader .bar-track { width: 14px; height: 90px; background: #14202c; border: 1px solid #345; display: flex; align-items: flex-end; }
+  .fader .bar-fill { width: 100%; background: #eee; }
+  .fader .name { color: #fff; margin-top: 3px; }
+
+  /* pad grid layout */
+  .pad-grid { display: grid; grid-template-columns: 16px repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 3px; height: 100%; }
+  .pad-row-label { display: flex; align-items: center; justify-content: center; color: #9a9a9a; font-size: 10px; }
+  .pad { background: #123047; border: 1px solid #2a4a68; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; }
+  .pad.empty { background: #0d1b28; }
+  .pad.lit { background: #7a1f2b; border-color: #c0392b; } /* displayId 0 (pad_state) != 0 -- confirmed red/pink tint, Twenty-fifth finding */
+
+  /* displayId 8 popup menu -- ALWAYS overlays on top of whatever's showing, real device renders it as
+     a box on the right side of the screen (Twenty-sixth/Twenty-seventh findings) */
+  #popup-menu {
+    position: absolute; top: 22px; right: 4px; bottom: 22px; width: 44%;
+    background: rgba(5,10,20,.94); border: 1px solid #345; display: flex; flex-direction: column;
+    font-size: 9px; overflow: hidden;
+  }
+  #popup-menu .item { padding: 2px 4px; color: #fff; border-bottom: 1px solid #1a2a38; }
+  #popup-menu .item.hl { background: #c0392b; } /* CC 111 = selectedMenuItem */
+  #screen { position: relative; }
+
+  /* pageTemplate=1 "message" overlay (writeMessageToDisplay) -- a separate, special rendering
+     pathway, not composable with the other templates/chrome (see protocol notes) -- so on the mockup
+     it's drawn as a full-screen takeover, same as it visually is on real hardware. */
+  #message-overlay {
+    position: absolute; inset: 0; background: #05070a; color: #fff; font-weight: bold;
+    font-size: 16px; letter-spacing: 1px; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 10px; box-sizing: border-box; white-space: pre-wrap;
+  }
+
+  /* list layout */
+  .list-layout { display: flex; height: 100%; gap: 8px; }
+  .list-layout .fader { flex: 0 0 20px; }
+  .list-items { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+  .list-item { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #fff; }
+  .list-item .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid #9a9a9a; }
+
+  #tabs { display: flex; height: 22px; }
+  #tabs .tab { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: #fff; }
+  #tabs .tab.on { background: #c0392b; }
+  #tabs .tab.off { background: #333; }
+
+  /* --- controls ----------------------------------------------------- */
+  #controls { flex: 1; min-width: 280px; max-width: 480px; }
+  #controls h3 { margin: 0 0 6px; font-size: 13px; color: #9cf; }
+  #controls fieldset { border: 1px solid #444; border-radius: 4px; margin-bottom: 10px; padding: 8px; }
+  #controls label { display: block; font-size: 11px; margin: 4px 0 2px; color: #aaa; }
+  #controls input[type=text] { width: 100%; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #444; padding: 3px 5px; font-family: monospace; }
+  #controls select { background: #222; color: #eee; border: 1px solid #444; padding: 3px; }
+  #controls textarea { width: 100%; box-sizing: border-box; background: #222; color: #eee; border: 1px solid #444; padding: 3px 5px; font-family: monospace; font-size: 11px; resize: vertical; }
+  #controls button { background: #2a3a4a; color: #eee; border: 1px solid #456; border-radius: 3px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+  #controls button:hover { background: #345; }
+  .row { display: flex; gap: 6px; }
+  .row > div { flex: 1; }
+  #note { font-size: 11px; color: #888; margin-top: 10px; max-width: 480px; }
+
+  #led-panel { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .led-item { display: flex; flex-direction: column; align-items: center; font-size: 9px; color: #aaa; width: 36px; }
+  .led-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid #555; background: #222; cursor: pointer; padding: 0; }
+  .led-dot.on { background: #e0a030; border-color: #ffc060; box-shadow: 0 0 6px #e0a030; } /* color unconfirmed on hardware -- on/off only is confirmed, hue is a placeholder */
+  .led-dot.unknown { background: transparent; border: 1px dashed #555; cursor: default; } /* CC not yet found -- see checklist item 11 */
+
+  #input-fields { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .input-group-label { font-size: 10px; color: #789; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  .input-group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 4px; }
+  .input-field { display: flex; flex-direction: column; align-items: center; font-size: 9px; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 3px 2px; background: #0c0c0c; }
+  .input-field .iv { font-size: 12px; color: #eee; font-family: monospace; font-weight: bold; }
+  .input-field.touched { border-color: #4a7; background: #0e1a12; }
+  .input-field.pressed { border-color: #e0a030; background: #241a08; }
+  /* The single most recently moved control -- picked by the server's own
+     `seq`, not by diffing snapshots, so two controls moving inside one poll
+     window still order correctly. */
+  .input-field.latest { border-color: #6cf; box-shadow: 0 0 7px rgba(102,204,255,.75); }
+  .input-field.latest .iv { color: #9df; }
+</style>
+</head>
+<body>
+<img id="feed" src="/stream.mjpg">
+
+<div id="camera-controls">
+  <h3>Camera controls</h3>
+  <div id="camera-status" style="font-size:11px; color:#888; margin-bottom:6px;">connecting...</div>
+  <div id="camera-sliders"></div>
+</div>
+
+<script>
+// Bidirectional live camera tuning -- talks to
+// tooling/webcam-viewer/camera_control_server.py (port 8092), NOT server.py,
+// same "diff-and-broadcast" shape as the Panorama simulator's own WS but
+// deliberately simpler (every slider move just sends its own value; the
+// server reads back and broadcasts the REAL applied value, since v4l2
+// sometimes clamps/rejects what you ask for).
+(function () {
+  const CAM_CONTROLS = {
+    exposure_time_absolute: { min: 1, max: 10000, label: 'Exposure time' },
+    auto_exposure: { min: 0, max: 3, label: 'Auto exposure mode (1=manual)' },
+    brightness: { min: 30, max: 255, label: 'Brightness' },
+    contrast: { min: 0, max: 10, label: 'Contrast' },
+    saturation: { min: 0, max: 200, label: 'Saturation' },
+    sharpness: { min: 0, max: 50, label: 'Sharpness' },
+    backlight_compensation: { min: 0, max: 10, label: 'Backlight comp' },
+    white_balance_automatic: { min: 0, max: 1, label: 'Auto white balance' },
+    white_balance_temperature: { min: 2500, max: 10000, label: 'WB temperature' },
+    focus_automatic_continuous: { min: 0, max: 1, label: 'Auto focus' },
+    focus_absolute: { min: 0, max: 40, label: 'Focus' },
+  };
+
+  const container = document.getElementById('camera-sliders');
+  const sliders = {};
+  Object.entries(CAM_CONTROLS).forEach(([name, cfg]) => {
+    const row = document.createElement('div');
+    row.className = 'cam-row';
+    const label = document.createElement('label');
+    label.textContent = cfg.label;
+    row.appendChild(label);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = cfg.min;
+    input.max = cfg.max;
+    input.step = 1;
+    row.appendChild(input);
+    const val = document.createElement('span');
+    val.className = 'cam-val';
+    row.appendChild(val);
+    container.appendChild(row);
+    sliders[name] = { input, val };
+  });
+
+  const CAM_WS_PORT = 8092;
+  let camWs = null;
+  let camWsReady = false;
+  const camStatus = document.getElementById('camera-status');
+
+  function applyCamState(state) {
+    Object.entries(state).forEach(([name, value]) => {
+      const s = sliders[name];
+      if (!s) return;
+      // Don't stomp a slider the user is actively dragging.
+      if (document.activeElement !== s.input) s.input.value = value;
+      s.val.textContent = value;
+    });
+  }
+
+  function connectCam() {
+    camWs = new WebSocket(`ws://${location.hostname}:${CAM_WS_PORT}`);
+    camWs.addEventListener('open', () => {
+      camWsReady = true;
+      camStatus.textContent = 'camera control connected ✓';
+      camStatus.style.color = '#7fd07f';
+    });
+    camWs.addEventListener('close', () => {
+      camWsReady = false;
+      camStatus.textContent = 'camera control disconnected, retrying...';
+      camStatus.style.color = '#e08080';
+      setTimeout(connectCam, 1500);
+    });
+    camWs.addEventListener('error', () => camWs.close());
+    camWs.addEventListener('message', (ev) => {
+      try { applyCamState(JSON.parse(ev.data)); } catch (e) { /* ignore malformed */ }
+    });
+  }
+  connectCam();
+
+  let camPushTimer = null;
+  Object.entries(sliders).forEach(([name, s]) => {
+    s.input.addEventListener('input', () => {
+      s.val.textContent = s.input.value;
+      clearTimeout(camPushTimer);
+      camPushTimer = setTimeout(() => {
+        if (!camWsReady) return;
+        camWs.send(JSON.stringify({ [name]: parseInt(s.input.value, 10) }));
+      }, 150);
+    });
+  });
+})();
+</script>
+
+<div id="simulator">
+  <div id="screen-wrap">
+    <div id="screen">
+      <div id="bigfont-row">
+        <div id="bigfont"></div>
+        <div id="paramval"></div>
+      </div>
+      <div id="pagelabels"></div>
+      <div id="titlebar"></div>
+      <div id="content"></div>
+      <div id="tabs"></div>
+      <div id="popup-menu" hidden></div>
+      <div id="message-overlay" hidden></div>
+    </div>
+  </div>
+
+  <div id="controls">
+    <h3>Panorama P1 screen simulator</h3>
+    <div id="note">Full field docs: research/panorama-p1-protocol-notes.md, protocol.json</div>
+
+    <fieldset>
+      <label>page_template</label>
+      <select id="in-layout">
+        <option value="knobs">16/17 mixer</option>
+        <option value="faders-split">18 instrument_layer_container</option>
+        <option value="faders-row">19/20 faders_row</option>
+        <option value="pads16">21 drum_pads</option>
+        <option value="pads12">22 drum_pads_3row</option>
+        <option value="list">4 list</option>
+        <option value="grid5">5 grid5</option>
+        <option value="message">1 message</option>
+        <option value="menu">2 menu</option>
+        <option value="transport-launcher">3 transport_launcher</option>
+        <option value="list-highlighted">6 list_highlighted</option>
+        <option value="scene-buttons">7 scene_buttons</option>
+        <option value="browser-list">8/9 browser_list</option>
+        <option value="reset">0 reset</option>
+      </select>
+    </fieldset>
+
+    <fieldset>
+      <label><input type="checkbox" id="chk-message-enabled" style="width:auto; display:inline;"> message (pageTemplate 1)</label>
+      <input type="text" id="in-message-overlay" value="" maxlength="127">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 2 -- big_font</label>
+      <input type="text" id="in-bigfont" value="" maxlength="30">
+      <label>displayId 3 -- current_value</label>
+      <input type="text" id="in-current-value" value="" maxlength="16">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 1 -- title_bar</label>
+      <div class="row">
+        <div><input type="text" id="in-tb1" value="" maxlength="12"></div>
+        <div><input type="text" id="in-tb2" value="" maxlength="12"></div>
+        <div><input type="text" id="in-tb3" value="" maxlength="12"></div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 5 -- page_labels</label>
+      <input type="text" id="in-pagelabels" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 6 -- ctrl_element_name</label>
+      <input type="text" id="in-names" value="">
+      <label>displayId 7 -- ctrl_element_value</label>
+      <input type="text" id="in-values" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 0 -- pad_state</label>
+      <input type="text" id="in-padstate" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>displayId 4 -- menu_button</label>
+      <div class="row">
+        <div style="flex:3"><input type="text" id="in-tabs" value=""></div>
+        <div style="flex:1"><input type="text" id="in-tabs-active" value="0"></div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label><input type="checkbox" id="chk-popup-enabled" style="width:auto; display:inline;"> displayId 8 -- page_menu</label>
+      <input type="text" id="in-menuitems" value="">
+      <label>CC 111 -- selectedMenuItem</label>
+      <input type="text" id="in-menuhighlight" value="">
+    </fieldset>
+
+    <fieldset>
+      <label>LEDs (CC, on/off)</label>
+      <div id="led-panel"></div>
+    </fieldset>
+
+    <fieldset>
+      <label>Status strip (CC 99-102 -- mutex, one of 5 states, not 4 checkboxes)</label>
+      <div id="status-led-panel" style="display:flex; gap:10px; margin-top:4px;"></div>
+    </fieldset>
+
+    <fieldset>
+      <label>CC 15+47 -- cursor-track volume (segmented, NOT on/off; 0-1023)</label>
+      <input type="text" id="in-cursorvolume" value="" placeholder="0-1023">
+    </fieldset>
+
+    <div id="push-status" style="font-size:11px; color:#888; margin-bottom:2px;">not yet pushed</div>
+    <div id="last-sent" style="font-size:10px; color:#666; margin-bottom:6px;">no sends yet</div>
+    <!-- Raw resync tool, kept for the raw perspective (see lib.rs/service.rs's
+         doc comments on the two being deliberately separate) -- no longer the
+         only way to force a clean overlay dismiss now that the semantic panel
+         below exists; that's the reliable path for show/hide (see its note). -->
+    <button id="full-sync-btn" type="button" style="margin-bottom:14px;">Send full state (bypass diff, raw only)</button>
+
+    <hr style="border-color:#333; margin:0 0 12px;">
+    <h3>Semantic commands</h3>
+    <div id="note">
+      A second envelope on the SAME socket -- <code>{"semantic": {"cmd": ..., ...}}</code>
+      instead of raw fields (service.rs's top doc comment). Not a different capability,
+      just a convenient way to COMPOSE the same raw writes: `DeviceState` (lib.rs) already
+      knows how to correctly restore whatever Background was last switched to here, which is
+      exactly what Hide Popup/Hide Message need to actually work (unlike the raw
+      message/popup checkboxes above, which only ever send-or-don't-send and can't force the
+      real template-switch side effect that dismissing needs -- see write_page_menu/
+      write_message's doc comments in lib.rs). This panel tracks its OWN "last background"
+      state, independent of the raw panel above -- click Switch Background here at least once
+      before Hide Popup/Hide Message, same sequence proven live by verb_test.rs's overlaytest.
+    </div>
+
+    <fieldset>
+      <label>Background type</label>
+      <select id="sem-bg-type"></select>
+      <label>Fields (JSON -- matches the Rust variant's own shape, camelCase)</label>
+      <textarea id="sem-bg-fields" rows="3"></textarea>
+      <div style="font-size:10px; color:#666; margin:4px 0 8px;">title_bar reuses the displayId 1 fields above (in-tb1/in-tb2/in-tb3)</div>
+      <button id="sem-switch-btn" type="button">Switch Background</button>
+    </fieldset>
+
+    <fieldset>
+      <label>Footer (displayId 4 -- menu_button/tabs) -- reuses in-tabs above</label>
+      <div style="font-size:10px; color:#666; margin-bottom:6px;">
+        Confirmed (Thirty-eighth finding): the popup's own Esc/Enter buttons share this SAME
+        slot -- switchBackground never touched it before, so it held stale content
+        indefinitely. Now resent automatically on every Switch/Show/Hide above; use this
+        button only to change what that resend actually contains.
+      </div>
+      <button id="sem-tabs-btn" type="button">Set Tabs</button>
+    </fieldset>
+
+    <fieldset>
+      <label>Header (displayId 2/3 -- big_font/current_value) -- reuses in-bigfont / in-current-value above</label>
+      <div style="font-size:10px; color:#666; margin-bottom:6px;">
+        Same generalization as Footer: an overlay can cover any part of the screen, so these
+        two are also now always resent alongside every Switch/Show/Hide, not just resent on a
+        bug report against them specifically.
+      </div>
+      <div class="row" style="gap:6px;">
+        <button id="sem-bigfont-btn" type="button">Set Big Font</button>
+        <button id="sem-current-value-btn" type="button">Set Current Value</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label>Popup (displayId 8) -- reuses in-menuitems / in-menuhighlight above</label>
+      <div class="row" style="gap:6px;">
+        <button id="sem-popup-show-btn" type="button">Show Popup</button>
+        <button id="sem-popup-highlight-btn" type="button">Set Highlight</button>
+        <button id="sem-popup-clear-highlight-btn" type="button">Clear Highlight</button>
+        <button id="sem-popup-hide-btn" type="button">Hide Popup</button>
+      </div>
+      <div style="font-size:10px; color:#666; margin-top:6px;">
+        Clear Highlight works by re-sending the popup's content, NOT by sending a "none" value
+        to the highlight CC -- that CC has no clear value (0/127/255 all leave the bar exactly
+        where it was, Thirty-seventh finding). Repopulating clears it while leaving the popup
+        open, confirmed on hardware (Fortieth finding).
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label>Message (pageTemplate 1) -- reuses in-message-overlay above</label>
+      <div class="row" style="gap:6px;">
+        <button id="sem-message-show-btn" type="button">Show Message</button>
+        <button id="sem-message-hide-btn" type="button">Hide Message</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <label>LEDs -- by name, one verb per LED</label>
+      <div style="font-size:10px; color:#666; margin-bottom:6px;">
+        `setLed` addresses one LED by the control it lights (`play`, `select` index 3), not by
+        raw CC and not as a whole-list resync. The 4-LED status strip is deliberately NOT here:
+        it's one of-N register, not 4 independent bits (confirmed hardware mutex), so it keeps
+        its own verb below.
+      </div>
+      <div id="sem-led-panel" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+      <label style="margin-top:8px;">Status strip (one-of-N, or off)</label>
+      <div id="sem-status-led-panel" style="display:flex; gap:4px;"></div>
+    </fieldset>
+
+    <div id="semantic-status" style="font-size:11px; color:#888; margin-bottom:6px;">no semantic command sent yet</div>
+
+    <hr style="border-color:#333; margin:0 0 12px;">
+    <h3>Device &rarr; host: physical input</h3>
+    <div id="note">
+      Read-only -- decoded straight from lib.rs's `InputState`/`decode_cc` (fader/encoder/
+      button identity, e.g. `fader_3`, `pan_encoder_5`, `play`), deliberately NOT mapped to
+      whatever Background is currently shown above (undecided whether that mapping ever makes
+      sense -- this is just "what the control IS on the hardware"). Live via polling (every
+      300ms this tab sends `{"queryInput":true}` and gets a fresh snapshot back) -- service.rs
+      has no true server push yet (see its own top doc comment), so this is a request/reply
+      loop dressed up as live, not an actual push, but it updates in well under a second either
+      way. Move a fader/knob or press a button on the real hardware to see it change here.
+    </div>
+    <div id="input-updated" style="font-size:10px; color:#666; margin-bottom:4px;">no input observed yet this connection</div>
+    <div id="input-fields">(waiting for the control list from service.rs...)</div>
+  </div>
+</div>
+
+<script>
+function el(id) { return document.getElementById(id); }
+function csv(s) { return s.split(',').map(x => x.trim()); }
+
+// See lib.rs's LED_CCS -- kept in sync by hand, same order. Deliberately
+// excludes CC 99-102 (the status strip): confirmed a hardware mutex (one
+// register, not 4 independent bits -- "Thirty-fifth finding"), handled by
+// its own single-select control (#status-led-panel) below instead of a
+// checkbox here, since checkboxes would misrepresent it as independently
+// toggleable.
+const LED_DEFS = [
+  [16, 'Sel1'], [17, 'Sel2'], [18, 'Sel3'], [19, 'Sel4'], [20, 'Sel5'], [21, 'Sel6'], [22, 'Sel7'], [23, 'Sel8'],
+  [106, 'Menu1'], [107, 'Menu2'], [108, 'Menu3'], [109, 'Menu4'], [110, 'Menu5'],
+  [80, 'Loop'], [84, 'Play'], [85, 'Record'], [29, 'AutoWr(?)'],
+  [30, 'Mute'], [31, 'Solo'], [25, 'CC25(?)'],
+];
+
+// The 4-LED status strip -- CONFIRMED mutex (Thirty-fifth finding): index 0 =
+// Status1/CC99 (leftmost) .. index 3 = Status4/CC102 (rightmost). 5 states
+// total: 0 = off, 1-4 = that position lit. A single-select control (radio
+// buttons), not 4 checkboxes, since only one can ever be lit at a time --
+// directly demonstrated (not assumed): setting one CC=127 without ever
+// clearing another turns the other off, and 0 sent to ANY of the 4 clears
+// whichever is showing.
+const STATUS_LED_CCS = [99, 100, 101, 102];
+
+function buildStatusLedPanel() {
+  const panel = el('status-led-panel');
+  panel.innerHTML = '';
+  const mkOption = (value, label) => {
+    const item = document.createElement('label');
+    item.style.cssText = 'display:flex; align-items:center; gap:3px; font-size:9px; color:#aaa;';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'status-led';
+    radio.value = value;
+    radio.addEventListener('change', () => pushToDevice());
+    item.appendChild(radio);
+    item.appendChild(document.createTextNode(label));
+    panel.appendChild(item);
+    return radio;
+  };
+  mkOption('0', 'Off').checked = true;
+  // Labels match the semantic/input vocabulary (status_led_0..3) for the same
+  // four CCs; the raw VALUES stay 1..4 since that's this path's existing
+  // encoding (0 = off) and renumbering it would break existing raw clients.
+  STATUS_LED_CCS.forEach((cc, i) => mkOption(String(i + 1), `status${i}`));
+}
+
+function statusLedValue() {
+  const checked = document.querySelector('input[name="status-led"]:checked');
+  return checked ? parseInt(checked.value, 10) : 0;
+}
+
+function buildLedPanel() {
+  const panel = el('led-panel');
+  panel.innerHTML = '';
+  LED_DEFS.forEach(([cc, label]) => {
+    const item = document.createElement('div');
+    item.className = 'led-item';
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    if (cc === null) {
+      dot.className = 'led-dot unknown';
+      dot.disabled = true;
+      dot.title = 'CC not yet found';
+    } else {
+      dot.className = 'led-dot';
+      dot.dataset.cc = cc;
+      dot.title = `CC ${cc}`;
+      dot.addEventListener('click', () => { dot.classList.toggle('on'); pushToDevice(); });
+    }
+    const lbl = document.createElement('div');
+    lbl.textContent = label;
+    item.appendChild(dot);
+    item.appendChild(lbl);
+    panel.appendChild(item);
+  });
+}
+buildLedPanel();
+buildStatusLedPanel();
+
+function ledsOnList() {
+  return [...document.querySelectorAll('.led-dot.on')].map(d => parseInt(d.dataset.cc, 10));
+}
+
+function renderTitleBar() {
+  const segs = [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value];
+  const bar = el('titlebar');
+  bar.innerHTML = '';
+  segs.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'seg ' + (i === 1 ? 'blue' : 'red'); // confirmed [red, blue, red] on hardware -- see Thirty-second finding
+    d.textContent = s;
+    bar.appendChild(d);
+  });
+}
+
+function renderTabs() {
+  const names = csv(el('in-tabs').value);
+  const active = parseInt(el('in-tabs-active').value, 10) || 0;
+  const bar = el('tabs');
+  bar.innerHTML = '';
+  names.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'tab ' + (i === active ? 'on' : 'off');
+    d.textContent = s;
+    bar.appendChild(d);
+  });
+}
+
+function fader(name, pct) {
+  const w = document.createElement('div');
+  w.className = 'fader';
+  w.innerHTML = `<div class="bar-track"><div class="bar-fill" style="height:${pct}%"></div></div><div class="name">${name}</div>`;
+  return w;
+}
+
+function padStateList() {
+  const raw = el('in-padstate').value.trim();
+  if (!raw) return [];
+  return raw.split(',').map(x => parseInt(x.trim(), 10) || 0);
+}
+
+function renderContent() {
+  const layout = el('in-layout').value;
+  const names = csv(el('in-names').value);
+  const values = csv(el('in-values').value);
+  const padState = padStateList();
+  const content = el('content');
+  content.innerHTML = '';
+
+  if (layout === 'knobs') {
+    const grid = document.createElement('div');
+    grid.className = 'knob-grid';
+    for (let i = 0; i < 8; i++) {
+      const k = document.createElement('div');
+      k.className = 'knob';
+      k.innerHTML = `<div class="val">${values[i] || ''}</div><div class="dial"></div><div class="name">${names[i] || ''}</div>`;
+      grid.appendChild(k);
+    }
+    content.appendChild(grid);
+  } else if (layout === 'faders-split') {
+    // Template 18 confirmed to use all 16 ctrlElementName slots, not 8: each of
+    // the 8 fader bars shows TWO stacked labels. Left group of 4 stacks
+    // names[0-3] (top) over names[4-7] (bottom); right group of 4 stacks
+    // names[8-11] (top) over names[12-15] (bottom) -- see "Follow-up on
+    // template 18: it actually has 16 name slots, not 8" in the protocol notes.
+    const row = document.createElement('div');
+    row.className = 'fader-row split';
+    const g1 = document.createElement('div'); g1.className = 'fader-group';
+    const g2 = document.createElement('div'); g2.className = 'fader-group';
+    for (let i = 0; i < 4; i++) g1.appendChild(fader(`${names[i] || ''}/${names[i + 4] || ''}`, 40 + i * 8));
+    for (let i = 0; i < 4; i++) g2.appendChild(fader(`${names[i + 8] || ''}/${names[i + 12] || ''}`, 40 + i * 8));
+    row.appendChild(g1); row.appendChild(g2);
+    content.appendChild(row);
+  } else if (layout === 'faders-row') {
+    // Templates 19/20: one continuous row of 8, single label per fader (16-slot
+    // stacking was never confirmed here -- that's specific to template 18).
+    const row = document.createElement('div');
+    row.className = 'fader-row';
+    for (let i = 0; i < 8; i++) row.appendChild(fader(names[i] || '', 40 + (i % 4) * 8));
+    content.appendChild(row);
+  } else if (layout === 'pads16' || layout === 'pads12') {
+    // Template 21 (pads16): full 4x4 grid, rows A-D, all 16 pads individually
+    // labeled. Template 22 (pads12): confirmed genuinely distinct (Sixteenth
+    // finding), a 3x4 grid, rows A-C only -- there is no 4th row at all, not
+    // just an unlabeled one. names[12-15] are ignored for pads12 since the
+    // device itself never renders a 4th row for that template.
+    const nrows = layout === 'pads16' ? 4 : 3;
+    const grid = document.createElement('div');
+    grid.className = 'pad-grid';
+    grid.style.gridTemplateRows = `repeat(${nrows}, 1fr)`;
+    const rows = (layout === 'pads16' ? ['D', 'C', 'B', 'A'] : ['C', 'B', 'A']);
+    for (let r = 0; r < nrows; r++) {
+      const lbl = document.createElement('div');
+      lbl.className = 'pad-row-label';
+      lbl.textContent = rows[r];
+      grid.appendChild(lbl);
+      for (let c = 0; c < 4; c++) {
+        const idx = (nrows - 1 - r) * 4 + c; // row A = indices 0-3, row B = 4-7, etc.
+        const pad = document.createElement('div');
+        const label = names[idx];
+        const lit = (padState[idx] || 0) !== 0; // displayId 0 -- confirmed red/pink tint, Twenty-fifth finding
+        pad.className = 'pad' + (label ? '' : ' empty') + (lit ? ' lit' : '');
+        pad.textContent = label || '';
+        // Confirmed on hardware (Thirty-second finding): the widget itself
+        // shades rows in a vertical gradient, darkest at the top row (D) to
+        // lightest at the bottom row (A) -- unrelated to any field content,
+        // so approximate it here too rather than a flat color for every row.
+        if (!lit && label) {
+          const shade = nrows > 1 ? r / (nrows - 1) : 0; // 0 = top row, 1 = bottom row
+          const base = [18, 48, 71], light = [58, 130, 190];
+          const col = base.map((b, i) => Math.round(b + (light[i] - b) * shade));
+          pad.style.background = `rgb(${col.join(',')})`;
+        }
+        grid.appendChild(pad);
+      }
+    }
+    content.appendChild(grid);
+  } else if (layout === 'list') {
+    const wrap = document.createElement('div');
+    wrap.className = 'list-layout';
+    wrap.appendChild(fader('', 55));
+    const items = document.createElement('div');
+    items.className = 'list-items';
+    names.slice(0, 8).forEach(n => {
+      const it = document.createElement('div');
+      it.className = 'list-item';
+      it.innerHTML = `<div class="dot"></div><div>${n}</div>`;
+      items.appendChild(it);
+    });
+    wrap.appendChild(items);
+    content.appendChild(wrap);
+  } else if (layout === 'grid5') {
+    const grid = document.createElement('div');
+    grid.className = 'pad-grid';
+    grid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+    grid.style.gridTemplateRows = 'repeat(2, 1fr)';
+    for (let i = 0; i < 8; i++) {
+      const pad = document.createElement('div');
+      pad.className = 'pad';
+      pad.textContent = names[i] || '';
+      grid.appendChild(pad);
+    }
+    content.appendChild(grid);
+  } else {
+    // No bespoke mock widget built yet for this template (message/menu/
+    // transport-launcher/list-highlighted/scene-buttons/browser-list) --
+    // fall back to a plain field dump rather than pretending to know the
+    // real layout. The actual SysEx write over the WebSocket is unaffected;
+    // this only concerns the on-screen mockup.
+    const dump = document.createElement('div');
+    dump.style.cssText = 'font-size:10px; color:#9a9a9a; line-height:1.5;';
+    dump.innerHTML = `<div style="color:#666;">(no mock widget for this template yet -- names/values shown raw)</div>` +
+      `names: ${names.filter(Boolean).join(', ') || '(none)'}<br>values: ${values.filter(Boolean).join(', ') || '(none)'}`;
+    content.appendChild(dump);
+  }
+}
+
+function renderPopupMenu() {
+  const items = el('chk-popup-enabled').checked ? csv(el('in-menuitems').value).filter(Boolean) : [];
+  const box = el('popup-menu');
+  if (items.length === 0) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const hl = parseInt(el('in-menuhighlight').value, 10) || 0; // 1-based, CC 111
+  box.innerHTML = '';
+  items.slice(0, 8).forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'item' + (i + 1 === hl ? ' hl' : '');
+    row.textContent = s;
+    box.appendChild(row);
+  });
+}
+
+function renderSimulator() {
+  el('bigfont').textContent = el('in-bigfont').value;
+  el('paramval').textContent = el('in-current-value').value; // displayId 3
+  el('pagelabels').textContent = csv(el('in-pagelabels').value).filter(Boolean).join('  |  '); // displayId 5
+  renderTitleBar();
+  renderContent();
+  renderTabs();
+  renderPopupMenu(); // displayId 8 -- ALWAYS an overlay, drawn last, independent of layout/template
+
+  // pageTemplate=1 message overlay -- a separate rendering pathway on real
+  // hardware, so it takes over the whole mock screen the same way, hiding
+  // everything else drawn above rather than compositing with it.
+  const msg = el('chk-message-enabled').checked ? el('in-message-overlay').value : '';
+  const overlay = el('message-overlay');
+  overlay.hidden = !msg;
+  overlay.textContent = msg;
+}
+
+// Both the message overlay and the popup menu are one-shot rendering
+// pathways that, per hardware testing (Twenty-seventh/Thirty-first
+// findings), are NOT cleared by sending an empty write to their own field --
+// only a genuine page_template switch dismisses either one. So "turning an
+// overlay off" isn't "send nothing", it's "force a real template switch" --
+// this is that action, shared by both checkboxes below since dismissing one
+// this way dismisses both (there's no way to clear just one while leaving
+// the other showing).
+function dismissOverlay() {
+  clearTimeout(pushTimer);
+  el('chk-message-enabled').checked = false;
+  el('chk-popup-enabled').checked = false;
+  const cur = currentState(); // message='' and menuItems=[] now that both checkboxes are unchecked
+  sendField(cur.layout, { titleBar: cur.titleBar });
+  lastSent.titleBar = cur.titleBar;
+  lastSent.message = cur.message;
+  lastSent.menuItems = cur.menuItems;
+  renderSimulator();
+}
+
+// Bidirectional, but NOT via this page's own HTTP server: the browser talks
+// directly to prototypes/panorama-p1/src/bin/service.rs, the one persistent
+// process that actually holds the connection to the device (see that file's
+// doc comment). This server (server.py) has no involvement in this at all --
+// it only serves the webcam feed and this static page. Every edit pushes
+// over the same open WebSocket (debounced, so a fast typist doesn't flood
+// it with a SysEx write per keystroke); the service also sends this tab
+// whatever the last known state was, right when the socket opens, so a
+// second tab (or a reload) starts in sync rather than from stale defaults.
+const WS_PORT = 8091;
+let ws = null;
+let wsReady = false;
+// applyScreenPush's "don't stomp an in-progress edit" guard checks
+// document.activeElement -- but nothing is meaningfully "in progress" the
+// very first time a fresh connection hands us its state, and index.html no
+// longer has any hardcoded field defaults of its own (see default_state() in
+// service.rs) -- if that very first sync is ever skipped (stray focus in
+// #controls at load, e.g. browser focus restore after a reload) every field
+// stays blank with nothing to fall back to. Force-apply once per connection.
+let syncedThisConnection = false;
+
+function connectService() {
+  ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+  syncedThisConnection = false;
+  const status = el('push-status');
+  ws.addEventListener('open', () => {
+    wsReady = true;
+    status.textContent = 'connected to service ✓';
+    status.style.color = '#7fd07f';
+  });
+  ws.addEventListener('close', () => {
+    wsReady = false;
+    status.textContent = 'service disconnected, retrying...';
+    status.style.color = '#e08080';
+    setTimeout(connectService, 1500);
+  });
+  ws.addEventListener('error', () => ws.close());
+  ws.addEventListener('message', (ev) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(ev.data);
+    } catch (e) {
+      return; // ignore malformed
+    }
+    // Three message shapes share this socket now (service.rs's top doc
+    // comment): the semantic model's own state, the device-input snapshot,
+    // and (falling through below) the plain raw screen-state object.
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'semanticState')) {
+      applySemanticState(parsed.semanticState);
+      return;
+    }
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'knownControls')) {
+      buildInputFields(parsed.knownControls);
+      return;
+    }
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'inputSnapshot')) {
+      applyInputSnapshot(parsed.inputSnapshot);
+      return;
+    }
+    applyScreenPush(parsed, !syncedThisConnection);
+    syncedThisConnection = true;
+  });
+}
+connectService();
+
+// service.rs has no true server push (see its own top doc comment for
+// why -- the sync WebSocket library here can't safely split reads/writes
+// across threads on one socket) -- polling for a fresh inputSnapshot is
+// the practical stand-in, and it's cheap enough (one small JSON round trip)
+// to do a few times a second without concern.
+setInterval(() => {
+  if (wsReady) ws.send(JSON.stringify({ queryInput: true }));
+}, 300);
+
+// Differential push: the device keeps per-field state (see "Thirteenth
+// finding" in the protocol notes), so we track what we last actually sent
+// and only send a message for a field whose current form value differs from
+// that -- editing the title bar never re-sends names/values/tabs, and vice
+// versa. `layout` (page template) gets special handling: switching it is
+// confirmed to clear PER-TEMPLATE CONTENT fields (names/values/padState/
+// pageLabels -- displayId 6/7/0/5) on the device even when the switching
+// message never touches them, while title_bar/big_font/current_value/
+// menu_button (displayId 1/2/3/4) are "global chrome" that survive the
+// switch untouched ("Fourteenth finding"). So a template change resends the
+// title bar (chrome, harmless either way) AND immediately re-supplies
+// whatever content this tab currently holds for the cleared fields --
+// otherwise the mockup would keep showing them while the real device (and
+// a fresh client's view of it) had actually gone blank, which is exactly
+// what prompted this: switching templates otherwise looks like "it all
+// disappeared" on the real hardware even though nothing here is broken.
+let lastSent = {
+  layout: null, bigfont: null, titleBar: null, names: null, values: null, tabs: null,
+  currentValue: null, pageLabels: null, padState: null, menuItems: null, menuHighlight: null,
+  message: null, ledsOn: null, cursorVolume: null, statusLed: null,
+};
+
+function arraysEqual(a, b) {
+  if (!a || !b) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+function currentState() {
+  return {
+    layout: el('in-layout').value,
+    bigfont: el('in-bigfont').value,
+    titleBar: [el('in-tb1').value, el('in-tb2').value, el('in-tb3').value],
+    names: csv(el('in-names').value),
+    values: csv(el('in-values').value),
+    tabs: csv(el('in-tabs').value),
+    // Added so every displayId is independently addressable, orthogonal to
+    // `layout` -- see the note fieldset in the controls panel.
+    currentValue: el('in-current-value').value,
+    pageLabels: csv(el('in-pagelabels').value),
+    padState: padStateList(),
+    // Gated by their "enabled" checkbox -- unchecked reports empty regardless
+    // of the text field's content, matching the server's "empty = don't
+    // touch" guard. Actually DISMISSING an already-shown overlay needs more
+    // than sending empty though (see dismissOverlay()) -- both are one-shot/
+    // overlay pathways that only a real template switch clears, never their
+    // own empty write.
+    menuItems: el('chk-popup-enabled').checked ? csv(el('in-menuitems').value).filter(Boolean) : [],
+    menuHighlight: parseInt(el('in-menuhighlight').value, 10) || 0,
+    message: el('chk-message-enabled').checked ? el('in-message-overlay').value : '',
+    ledsOn: ledsOnList(),
+    cursorVolume: parseInt(el('in-cursorvolume').value, 10) || 0,
+    statusLed: statusLedValue(),
+  };
+}
+
+function sendField(layout, fields) {
+  if (!wsReady) return;
+  ws.send(JSON.stringify(Object.assign({ layout }, fields)));
+  // Visible confirmation of what the diff logic actually decided to send,
+  // and when -- so "did my edit actually go out" is never a guess.
+  const sentAt = new Date().toLocaleTimeString();
+  el('last-sent').textContent = `sent @ ${sentAt}: ${Object.keys(fields).join(', ')}`;
+}
+
+let pushTimer = null;
+function pushToDevice() {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    if (!wsReady) return; // status line already shows "disconnected"
+    const cur = currentState();
+    const layoutKnown = lastSent.layout !== null;
+    const layoutChanged = layoutKnown && cur.layout !== lastSent.layout;
+
+    if (layoutChanged) {
+      // Re-supply the per-template content fields on the new template too --
+      // the real device just cleared them as a side effect of the switch, so
+      // without this the mockup (still showing this tab's current input
+      // values) would drift from what the device actually has, which reads
+      // as "switching templates wiped everything." Chrome fields
+      // (bigfont/currentValue/titleBar/tabs) survive the switch already, so
+      // only titleBar is resent among those (harmless, and it's the field
+      // that's always safe to resend regardless).
+      const fields = { titleBar: cur.titleBar };
+      if (cur.names.some(Boolean)) fields.names = cur.names;
+      if (cur.values.some(Boolean)) fields.values = cur.values;
+      if (cur.padState.length) fields.padState = cur.padState;
+      if (cur.pageLabels.some(Boolean)) fields.pageLabels = cur.pageLabels;
+      sendField(cur.layout, fields);
+      lastSent = {
+        layout: cur.layout, titleBar: cur.titleBar,
+        bigfont: lastSent.bigfont, currentValue: lastSent.currentValue, tabs: lastSent.tabs,
+        names: cur.names, values: cur.values, padState: cur.padState, pageLabels: cur.pageLabels,
+        menuItems: lastSent.menuItems, menuHighlight: lastSent.menuHighlight,
+        message: lastSent.message, ledsOn: lastSent.ledsOn, cursorVolume: lastSent.cursorVolume,
+        statusLed: lastSent.statusLed,
+      };
+      return;
+    }
+    if (!layoutKnown) lastSent.layout = cur.layout; // first push ever: adopt silently, no switch to carry
+
+    if (!arraysEqual(cur.titleBar, lastSent.titleBar)) {
+      sendField(cur.layout, { titleBar: cur.titleBar });
+      lastSent.titleBar = cur.titleBar;
+    }
+    if (cur.bigfont !== lastSent.bigfont) {
+      sendField(cur.layout, { bigfont: cur.bigfont });
+      lastSent.bigfont = cur.bigfont;
+    }
+    if (!arraysEqual(cur.names, lastSent.names)) {
+      sendField(cur.layout, { names: cur.names });
+      lastSent.names = cur.names;
+    }
+    if (!arraysEqual(cur.values, lastSent.values)) {
+      sendField(cur.layout, { values: cur.values });
+      lastSent.values = cur.values;
+    }
+    if (!arraysEqual(cur.tabs, lastSent.tabs)) {
+      sendField(cur.layout, { tabs: cur.tabs });
+      lastSent.tabs = cur.tabs;
+    }
+    if (cur.currentValue !== lastSent.currentValue) {
+      sendField(cur.layout, { currentValue: cur.currentValue });
+      lastSent.currentValue = cur.currentValue;
+    }
+    if (!arraysEqual(cur.pageLabels, lastSent.pageLabels)) {
+      sendField(cur.layout, { pageLabels: cur.pageLabels });
+      lastSent.pageLabels = cur.pageLabels;
+    }
+    if (!arraysEqual(cur.padState, lastSent.padState)) {
+      sendField(cur.layout, { padState: cur.padState });
+      lastSent.padState = cur.padState;
+    }
+    // Popup menu (displayId 8) and its CC-111 highlight always target
+    // page_template=0 on the real device regardless of `cur.layout` -- sent
+    // the same way (via sendField) since the service ignores `layout` for
+    // these two fields anyway (see service.rs's apply()).
+    if (!arraysEqual(cur.menuItems, lastSent.menuItems)) {
+      sendField(cur.layout, { menuItems: cur.menuItems });
+      lastSent.menuItems = cur.menuItems;
+    }
+    if (cur.menuHighlight !== lastSent.menuHighlight) {
+      sendField(cur.layout, { menuHighlight: cur.menuHighlight });
+      lastSent.menuHighlight = cur.menuHighlight;
+    }
+    // The message overlay (pageTemplate=1) is its own rendering pathway,
+    // independent of `cur.layout` too -- write_message() on the service side
+    // hardcodes its own page_template, same as the popup menu does.
+    if (cur.message !== lastSent.message) {
+      sendField(cur.layout, { message: cur.message });
+      lastSent.message = cur.message;
+    }
+    // LEDs are plain CC feedback, unrelated to page_template entirely.
+    if (!arraysEqual(cur.ledsOn, lastSent.ledsOn)) {
+      sendField(cur.layout, { ledsOn: cur.ledsOn });
+      lastSent.ledsOn = cur.ledsOn;
+    }
+    // CC 15+47 -- also plain CC feedback, unrelated to page_template.
+    if (cur.cursorVolume !== lastSent.cursorVolume) {
+      sendField(cur.layout, { cursorVolume: cur.cursorVolume });
+      lastSent.cursorVolume = cur.cursorVolume;
+    }
+    // Status strip (CC 99-102) -- a mutex, sent as a single 0-4 value, not
+    // per-CC checkboxes; unrelated to page_template.
+    if (cur.statusLed !== lastSent.statusLed) {
+      sendField(cur.layout, { statusLed: cur.statusLed });
+      lastSent.statusLed = cur.statusLed;
+    }
+  }, 350);
+}
+
+document.querySelectorAll('#controls input, #controls select').forEach(i => {
+  i.addEventListener('input', () => { renderSimulator(); pushToDevice(); });
+});
+
+// Full-state transmission is a distinct, deliberately-available path, not
+// just an implicit side effect of the differential logic above: one
+// WebSocket frame carrying every field, applied by service.rs in one shot
+// regardless of what the device last held. Useful as a known-good baseline
+// (e.g. before/between isolated tests) and as a manual "resync" if this
+// tab's diff bookkeeping and the device's actual state have drifted apart
+// for any reason (dropped message, another client's write we didn't see, a
+// device power cycle). Bypasses the debounce timer too -- sends immediately.
+function sendFullState() {
+  clearTimeout(pushTimer);
+  const cur = currentState();
+  if (!wsReady) return;
+  ws.send(JSON.stringify(cur));
+  lastSent = Object.assign({}, cur);
+}
+el('full-sync-btn').addEventListener('click', sendFullState);
+
+// Unchecking either overlay checkbox needs the real dismiss action, not just
+// "stop sending this field" (see dismissOverlay()'s doc comment). Checking
+// one just falls through to the generic #controls input listener above,
+// which already re-renders and pushes normally.
+el('chk-message-enabled').addEventListener('change', (e) => { if (!e.target.checked) dismissOverlay(); });
+el('chk-popup-enabled').addEventListener('change', (e) => { if (!e.target.checked) dismissOverlay(); });
+
+// --- Semantic commands ------------------------------------------------
+// The other envelope shape service.rs accepts on this same socket --
+// {"semantic": {"cmd": ..., ...}} -- see the #note text above the "Semantic
+// commands" fieldset for why this exists alongside, not instead of, the raw
+// fields above. `DeviceState` (lib.rs) does the actual composing; this code
+// just builds the JSON that names which verb and hands over whatever the
+// (shared, reused) raw input fields currently hold.
+function sendSemantic(cmd) {
+  if (!wsReady) return;
+  ws.send(JSON.stringify({ semantic: cmd }));
+}
+
+// One placeholder field-shape per Background variant, so picking a type
+// doesn't leave the user guessing the Rust struct's exact field names --
+// purely a textarea pre-fill, freely editable before "Switch Background" is
+// actually clicked. Field names are camelCase to match `Background`'s
+// `#[serde(rename_all = "camelCase")]` wire shape (lib.rs).
+const BACKGROUND_DEFAULTS = {
+  Mixer: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`knob${i}`, { name: `K${i}`, value: `${i*10}` }])),
+  FaderSplit: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`fader${i}`, { top: `T${i}`, bottom: `B${i}` }])),
+  FaderRow: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`fader${i}`, `F${i}`])),
+  PadView: Object.fromEntries(['a','b','c','d'].flatMap(r =>
+    [1,2,3,4].map(c => [`pad${r.toUpperCase()}${c}`, { name: `${r.toUpperCase()}${c}`, state: 'Default' }]))),
+  PadView3Row: Object.fromEntries(['a','b','c'].flatMap(r =>
+    [1,2,3,4].map(c => [`pad${r.toUpperCase()}${c}`, { name: `${r.toUpperCase()}${c}`, state: 'Default' }]))),
+  List: Object.fromEntries([1,2,3,4,5].map(i => [`item${i}`, `I${i}`])),
+  Grid: Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`button${i}`, `G${i}`])),
+  TransportLauncher: Object.assign(
+    { loopLeft: 'L:1.1.1', loopRight: 'R:5.1.1' },
+    Object.fromEntries([1,2,3,4,5,6,7,8].map(i => [`button${i}`, `T${i}`]))),
+  Menu: {}, // unit variant -- no content fields characterized yet
+  // The two genuinely OPEN lists keep arrays; everything else is enumerated.
+  ListHighlighted: { items: ['I1', 'I2', 'I3'], highlighted: 0 },
+  SceneButtons: Object.fromEntries([1,2,3,4].map(i => [`scene${i}`, `S${i}`])),
+  BrowserList: { items: ['B1', 'B2', 'B3'] },
+  Reset: {},
+  Blank: {},
+};
+
+(function buildBackgroundTypeSelect() {
+  const sel = el('sem-bg-type');
+  Object.keys(BACKGROUND_DEFAULTS).forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.value = 'Mixer';
+  el('sem-bg-fields').value = JSON.stringify(BACKGROUND_DEFAULTS.Mixer);
+})();
+el('sem-bg-type').addEventListener('change', () => {
+  el('sem-bg-fields').value = JSON.stringify(BACKGROUND_DEFAULTS[el('sem-bg-type').value] || {});
+});
+
+el('sem-switch-btn').addEventListener('click', () => {
+  let fields;
+  try {
+    fields = JSON.parse(el('sem-bg-fields').value || '{}');
+  } catch (e) {
+    alert(`Fields JSON doesn't parse: ${e.message}`);
+    return;
+  }
+  const background = Object.assign({ type: el('sem-bg-type').value }, fields);
+  // Every field named, nothing positional: the title bar's three segments go
+  // as titleLeft/titleCenter/titleRight rather than an array whose slot
+  // meanings you'd have to count out.
+  sendSemantic({
+    cmd: 'switchBackground',
+    background,
+    titleLeft: el('in-tb1').value,
+    titleCenter: el('in-tb2').value,
+    titleRight: el('in-tb3').value,
+  });
+});
+
+// Popup/message actions reuse the SAME raw input fields as the checkboxes
+// above (in-menuitems/in-menuhighlight/in-message-overlay) -- one set of
+// fields, two ways to send them (see the #note text).
+el('sem-popup-show-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'showPopup', items: csv(el('in-menuitems').value).filter(Boolean) });
+});
+el('sem-popup-highlight-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'setPopupHighlight', row: parseInt(el('in-menuhighlight').value, 10) || 0 });
+});
+el('sem-popup-clear-highlight-btn').addEventListener('click', () => sendSemantic({ cmd: 'clearPopupHighlight' }));
+
+// One toggle per NAMED led -- mirrors lib.rs's `Led` enum (kept in sync by
+// hand; the Rust side is the source of truth for which exist).
+const SEMANTIC_LEDS = [
+  { label: 'play', cmd: { led: 'play' } },
+  { label: 'record', cmd: { led: 'record' } },
+  { label: 'loop', cmd: { led: 'loop' } },
+  // These four are CONFIRMED to light nothing on this unit (photographed at
+  // the sensor noise floor vs an all-off baseline, Forty-first finding). The
+  // CCs are real and still addressable -- "nothing lights up" is the finding,
+  // not a reason to hide them -- but the UI shouldn't imply they work.
+  { label: 'mute\u00b7dead', cmd: { led: 'mute' }, dead: true },
+  { label: 'solo\u00b7dead', cmd: { led: 'solo' }, dead: true },
+  { label: 'autoWr\u00b7dead', cmd: { led: 'automationWrite' }, dead: true },
+  { label: 'cc25\u00b7dead', cmd: { led: 'cc25Uncharacterized' }, dead: true },
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map(i => ({ label: `sel${i}`, cmd: { led: 'select', index: i } })),
+  ...[0, 1, 2, 3, 4].map(i => ({ label: `scr${i}`, cmd: { led: 'screenButton', index: i } })),
+];
+
+(function buildSemanticLedPanel() {
+  const panel = el('sem-led-panel');
+  SEMANTIC_LEDS.forEach(({ label, cmd, dead }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.dataset.on = 'false';
+    btn.style.cssText = 'font-size:10px; padding:2px 5px;'
+      + (dead ? ' opacity:.45; border-style:dashed;' : '');
+    if (dead) btn.title = 'CC is real and gets sent, but confirmed to light nothing on this unit';
+    btn.addEventListener('click', () => {
+      const on = btn.dataset.on !== 'true';
+      btn.dataset.on = String(on);
+      btn.style.background = on ? '#e0a030' : '';
+      btn.style.color = on ? '#000' : '';
+      sendSemantic(Object.assign({ cmd: 'setLed', on }, cmd));
+    });
+    panel.appendChild(btn);
+  });
+
+  const statusPanel = el('sem-status-led-panel');
+  // One register with five states -> an enum on the wire, not a number
+  // with magic values. There's no way to express "two lit at once".
+  ['off', 'status0', 'status1', 'status2', 'status3'].forEach(state => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = state;
+    btn.style.cssText = 'font-size:10px; padding:2px 5px;';
+    btn.addEventListener('click', () => sendSemantic({ cmd: 'setStatusLed', state }));
+    statusPanel.appendChild(btn);
+  });
+})();
+el('sem-popup-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hidePopup' }));
+
+el('sem-message-show-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'showMessage', text: el('in-message-overlay').value });
+});
+el('sem-message-hide-btn').addEventListener('click', () => sendSemantic({ cmd: 'hideMessage' }));
+
+el('sem-tabs-btn').addEventListener('click', () => {
+  // Named per physical button, matching screen_button_0..4 everywhere else.
+  const t = csv(el('in-tabs').value);
+  sendSemantic({
+    cmd: 'setFooter',
+    screenButton0: t[0] || ' ', screenButton1: t[1] || ' ', screenButton2: t[2] || ' ',
+    screenButton3: t[3] || ' ', screenButton4: t[4] || ' ',
+  });
+});
+el('sem-bigfont-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'setHeaderBigFont', text: el('in-bigfont').value });
+});
+el('sem-current-value-btn').addEventListener('click', () => {
+  sendSemantic({ cmd: 'setHeaderCurrentValue', text: el('in-current-value').value });
+});
+
+// Rendered from `{"semanticState": ...}` messages -- see DeviceState::snapshot()
+// in lib.rs. Software mirror only (no device read-back exists), same honesty
+// as the Rust side. `header`/`footer` are nested objects now (Header/Footer
+// structs in lib.rs), not flat titleBar/tabs/bigfont/currentValue fields.
+function applySemanticState(state) {
+  if (!state) return;
+  const bgType = state.background ? state.background.type : '(none switched yet)';
+  const header = state.header || {};
+  const footer = state.footer || {};
+  const popup = state.popupVisible ? `visible (${(state.popupItems || []).length} items, highlight ${state.popupHighlight ?? '-'})` : 'hidden';
+  const message = state.messageVisible ? `visible ("${state.messageText || ''}")` : 'hidden';
+  el('semantic-status').textContent =
+    `background: ${bgType}  |  header.titleBar: ${(header.titleBar || []).join('/')}  |  header.bigFont: ${header.bigFont || ''}  |  header.currentValue: ${header.currentValue || ''}  |  footer.tabs: ${(footer.tabs || []).join('/')}  |  popup: ${popup}  |  message: ${message}`;
+}
+
+// Built once from `{"knownControls": [{"cc":0,"name":"fader_1","kind":"Fader"},
+// ...]}` -- the fixed, complete field list (lib.rs's `known_input_controls()`,
+// not hand-duplicated here) sent once per connection since it never changes
+// at runtime. One field per control, always present, grouped by kind --
+// "just show ALL of them as fields... I do not care much for the log style".
+const inputFieldEls = {}; // name -> {root, valueEl}
+
+function buildInputFields(controls) {
+  const container = el('input-fields');
+  container.innerHTML = '';
+  for (const key in inputFieldEls) delete inputFieldEls[key];
+
+  const groups = { Fader: [], Encoder: [], Button: [], Unknown: [] };
+  (controls || []).forEach(c => (groups[c.kind] || groups.Unknown).push(c));
+
+  const groupLabels = { Fader: 'Faders', Encoder: 'Encoders', Button: 'Buttons', Unknown: 'Unrecognized' };
+  Object.keys(groupLabels).forEach(kind => {
+    const list = groups[kind];
+    if (list.length === 0) return;
+    const label = document.createElement('div');
+    label.className = 'input-group-label';
+    label.textContent = `${groupLabels[kind]} (${list.length})`;
+    container.appendChild(label);
+
+    const grid = document.createElement('div');
+    grid.className = 'input-group-grid';
+    list.sort((a, b) => a.cc - b.cc).forEach(c => {
+      const field = document.createElement('div');
+      field.className = 'input-field';
+      const nameEl = document.createElement('div');
+      nameEl.textContent = c.name;
+      const valueEl = document.createElement('div');
+      valueEl.className = 'iv';
+      valueEl.textContent = '—'; // em dash -- never observed yet
+      field.appendChild(nameEl);
+      field.appendChild(valueEl);
+      grid.appendChild(field);
+      inputFieldEls[c.name] = { root: field, valueEl };
+    });
+    container.appendChild(grid);
+  });
+}
+
+// Rendered from `{"inputSnapshot": {"fader_1": {"lastEvent": {"kind":
+// "Fader", ...}, "value": 85}, ...}}`, polled every 300ms -- updates each
+// field BUILT ABOVE in place rather than rebuilding the list, so a field
+// that's never been touched keeps showing its placeholder instead of
+// disappearing/reappearing. Each entry is an `InputControlState` (lib.rs),
+// NOT a bare InputEvent -- `value` is InputControlState's own mirrored/
+// accumulated 0..=127 number (right for Fader and Encoder alike); Button
+// needs `lastEvent.pressed` specifically since "value" alone can't
+// distinguish "pressed" from "just released to 0".
+function describeInputEvent(ev) {
+  if (!ev || !ev.lastEvent) return { text: '?', pressed: false };
+  if (ev.lastEvent.kind === 'Button') {
+    return { text: ev.lastEvent.pressed ? 'ON' : 'off', pressed: !!ev.lastEvent.pressed };
+  }
+  if (ev.lastEvent.kind === 'Encoder') {
+    // `value` is the LAST DELTA for encoders, not a position -- these are
+    // endless relative controls (confirmed: the hardware only ever emits
+    // ±3, one detent). Show the sign so direction is obvious.
+    return { text: `${ev.value > 0 ? '+' : ''}${ev.value}`, pressed: false };
+  }
+  return { text: `${ev.value}`, pressed: false };
+}
+
+function applyInputSnapshot(snapshot) {
+  const names = Object.keys(snapshot || {});
+  el('input-updated').textContent = names.length === 0
+    ? 'no input observed yet this connection'
+    : `last poll reply: ${new Date().toLocaleTimeString()} (${names.length} control${names.length === 1 ? '' : 's'} seen)`;
+  // Which control moved most recently? The server stamps a monotonic `seq`
+  // in InputState::observe, so this is the true order -- a client diffing
+  // successive polls couldn't tell, since two controls can change inside one
+  // 300ms window.
+  let latestName = null;
+  let latestSeq = -1;
+  names.forEach(name => {
+    const seq = snapshot[name] && snapshot[name].seq;
+    if (typeof seq === 'number' && seq > latestSeq) {
+      latestSeq = seq;
+      latestName = name;
+    }
+  });
+
+  names.forEach(name => {
+    const field = inputFieldEls[name];
+    if (!field) return; // a control reported that knownControls didn't list -- ignore rather than crash
+    const { text, pressed } = describeInputEvent(snapshot[name]);
+    field.valueEl.textContent = text;
+    field.root.classList.add('touched');
+    field.root.classList.toggle('pressed', pressed);
+    field.root.classList.toggle('latest', name === latestName);
+  });
+
+  if (latestName) {
+    el('input-updated').textContent += `  |  last moved: ${latestName}`;
+  }
+}
+
+renderSimulator();
+</script>
+
+<script>
+// applyScreenPush is also called from the WebSocket 'message' handler above
+// (connectService()) -- that's how this mockup stays in sync with the real
+// device's last-known state from ANY client, not just this tab's own edits.
+let knownHtmlMtime = null;
+
+function applyScreenPush(push, force) {
+  if (!push) return;
+  // Don't stomp on an in-progress edit in this tab -- except the very first
+  // sync of a fresh connection (force=true from connectService()), which
+  // must always land or every field stays blank with nothing to fall back to.
+  if (!force && document.activeElement && document.activeElement.closest('#controls')) return;
+  if (push.layout !== undefined) el('in-layout').value = push.layout;
+  if (push.bigfont !== undefined) el('in-bigfont').value = push.bigfont;
+  if (push.titleBar) {
+    el('in-tb1').value = push.titleBar[0] || '';
+    el('in-tb2').value = push.titleBar[1] || '';
+    el('in-tb3').value = push.titleBar[2] || '';
+  }
+  if (push.names) el('in-names').value = push.names.join(',');
+  if (push.values) el('in-values').value = push.values.join(',');
+  if (push.tabs) el('in-tabs').value = push.tabs.join(',');
+  if (push.currentValue !== undefined) el('in-current-value').value = push.currentValue;
+  if (push.pageLabels) el('in-pagelabels').value = push.pageLabels.join(',');
+  if (push.padState) el('in-padstate').value = push.padState.join(',');
+  if (push.menuItems) {
+    el('in-menuitems').value = push.menuItems.join(',');
+    el('chk-popup-enabled').checked = push.menuItems.length > 0;
+  }
+  if (push.menuHighlight !== undefined) el('in-menuhighlight').value = push.menuHighlight;
+  if (push.message !== undefined) {
+    el('in-message-overlay').value = push.message;
+    el('chk-message-enabled').checked = !!push.message;
+  }
+  if (push.ledsOn) {
+    document.querySelectorAll('.led-dot').forEach(d => {
+      d.classList.toggle('on', push.ledsOn.includes(parseInt(d.dataset.cc, 10)));
+    });
+  }
+  if (push.cursorVolume !== undefined) el('in-cursorvolume').value = push.cursorVolume;
+  if (push.statusLed !== undefined) {
+    const r = document.querySelector(`input[name="status-led"][value="${push.statusLed}"]`);
+    if (r) r.checked = true;
+  }
+  renderSimulator();
+
+  // This push is itself a record of what's actually on the device (from this
+  // tab's own last send, or another client's) -- fold whatever fields it
+  // carries into our diff baseline so pushToDevice() doesn't re-send them as
+  // "changed" the next time this tab's own inputs are touched.
+  if (push.layout !== undefined) lastSent.layout = push.layout;
+  if (push.bigfont !== undefined) lastSent.bigfont = push.bigfont;
+  if (push.titleBar) lastSent.titleBar = push.titleBar;
+  if (push.names) lastSent.names = push.names;
+  if (push.values) lastSent.values = push.values;
+  if (push.tabs) lastSent.tabs = push.tabs;
+  if (push.currentValue !== undefined) lastSent.currentValue = push.currentValue;
+  if (push.pageLabels) lastSent.pageLabels = push.pageLabels;
+  if (push.padState) lastSent.padState = push.padState;
+  if (push.menuItems) lastSent.menuItems = push.menuItems;
+  if (push.menuHighlight !== undefined) lastSent.menuHighlight = push.menuHighlight;
+  if (push.message !== undefined) lastSent.message = push.message;
+  if (push.ledsOn) lastSent.ledsOn = push.ledsOn;
+  if (push.cursorVolume !== undefined) lastSent.cursorVolume = push.cursorVolume;
+  if (push.statusLed !== undefined) lastSent.statusLed = push.statusLed;
+}
+
+// Purely hot-reload now (mtime check) -- state sync is the WebSocket's job
+// (see connectService() above), not this HTTP server's, since server.py has
+// no involvement in screen state at all anymore.
+async function poll() {
+  try {
+    const res = await fetch('/state.json', {cache: 'no-store'});
+    const state = await res.json();
+    if (knownHtmlMtime === null) {
+      knownHtmlMtime = state._html_mtime;
+    } else if (state._html_mtime !== knownHtmlMtime) {
+      location.reload();
+      return;
+    }
+  } catch (e) { /* ignore, retry next tick */ }
+  setTimeout(poll, 700);
+}
+poll();
+</script>
+</body>
+</html>
