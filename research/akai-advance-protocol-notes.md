@@ -270,6 +270,125 @@ Note also that the firmware-update command uses model `0x2E` while our Advance 2
 answers Device Inquiry with family `0x2F`. Not yet explained; do not assume the
 two are interchangeable.
 
+## Eighth — VIP drives the screen by uploading Lua at runtime. Free-form is tier 1.
+
+The Seventh finding left one question open: whether `lua_ifc_load_script` is
+reachable at runtime, or whether installing a widget means flashing the asset
+region. **It is reachable at runtime, and VIP does exactly that.**
+
+Unpacked `VIP-3.1.2.1-Mac-Update.zip` on Linux without macOS tooling —
+`tooling/firmware/xar.py` reads the `.pkg` (XAR) container, `tooling/firmware/cpio.py`
+reads the gzip'd `odc` cpio Payload inside it. Being a macOS build is no obstacle
+to reading it, and Mach-O keeps more symbols than a stripped Windows build would.
+
+### The evidence
+
+Strings in `VIP.vst/Contents/MacOS/VIP`:
+
+```
+Too many widgets created on device
+Too many page created on device
+created all hardware pages  /  destroyed all hardware pages
+%s called. script not loaded
+../lua_scripts/bitmapButton.lua
+../lua_scripts/instancesList.lua
+ADW1Interface::heartbeat() missed a ping.
+luaSetTextIndex > 1500
+```
+
+VIP creates pages and widgets *on the device*, loads Lua scripts by name, and
+calls into them — all against stock firmware, with nothing flashed.
+
+### The scripts ship as readable source
+
+All 20 of them, at
+`Library/Application Support/VIP/skins/lua_scripts/*.lua`. They are Akai's files
+and are deliberately not committed here; they live under `~/.cache/hacpad-re/`
+for reference. `splash.lua` in full is short enough to be worth quoting:
+
+```lua
+local DEFAULT_TEXT = {
+	text = "Launching VIP", color = 0xffffffff,
+	font = 9,  -- AeileronRegular
+	font_size = 18, just_ver = 1, just_hor = 0,
+	bk_color = 0x00050505, border_color = 0x88ffffff,
+	border_width_top = 0, ...
+}
+TEXT_TITLE = text_data.new()
+text_data.set (TEXT_TITLE, DEFAULT_TEXT )
+
+function draw (args)
+  draw_rect(0, 0, 480, 272, 0xff000000)
+  draw_text(TEXT_TITLE, 185, 80, 200, 30)
+  if (decodedID ~= 0) then draw_image (18, decodedID, 223, 130) end
+end
+
+function set_decoded(args)
+    decodedID = get_byte(args, 0) * 256 + get_byte(args, 1)
+end
+
+function decode_png_asset(args)
+    local asset = get_byte(args, 0) * 256 + get_byte(args, 1)
+    if (get_byte(args, 3) == 0) then
+        decode_image(14, asset, 18, asset, 0xFFFFFFFF)  -- white as transparent
+    else
+        decode_image(14, asset, 18, asset)
+    end
+end
+```
+
+**`draw_rect(0, 0, 480, 272, ...)` establishes the screen as 480x272**, which the
+`MAX_W = 480 / MAX_H = 140` in the firmware's own widget did not (that was a
+widget region, not the panel).
+
+### The device API, counted across all 20 scripts
+
+| Function | Uses | Shape |
+|---|---:|---|
+| `draw_rect` | 175 | `(x, y, w, h, argb)` — alpha is real |
+| `text_data.set` | 124 | `(handle, style_table)` |
+| `draw_image` | 61 | `(bank, asset_id, x, y)` |
+| `draw_text` | 51 | `(handle, x, y, w, h)` |
+| `text_data.new` | 46 | returns a styled-text handle |
+| `decode_image` | 7 | `(src_bank, src_id, dst_bank, dst_id [, transparent])` |
+| `led_control_set_level_midi` | 24 | LED brightness |
+| `get_byte` | 322 | `(args, n)` — unpack host-supplied bytes |
+| `lua_widget_make_dirty` | 1 | invalidate |
+| `send_arg` | 2 | **script -> host**, so the channel is bidirectional |
+
+Fonts are referenced by number (`font = 9 -- AeileronRegular`). `bit32` is
+available. Colours are ARGB throughout, and alpha composites (`0x20000000` used
+as a fade, `0x88ffffff` as a translucent border).
+
+Entry points are **arbitrary function names**: the scripts define `draw`, `init`,
+`set_text`, `set_led_state`, `setColors`, `select`, `highlight`, `read_int32`,
+`read_string` and so on, and the host invokes them by name with byte arguments.
+That matches the firmware's `Lua call_function '%s' error`.
+
+### What this means for hacpad
+
+This device is not a set of addressable text slots like the P1. It is a
+**480x272 ARGB framebuffer with a scripting runtime, hardware 2D blitting, PNG
+decoding and font rendering**, and the host can push code to it at runtime.
+On-screen drawing — the thing hacpad exists for — is available here at **tier 1**,
+on stock firmware, with nothing flashed.
+
+### Still unknown: the wire format
+
+We now know these operations exist and are runtime-reachable. We do **not** yet
+know how they are encoded on the wire. Specifically unresolved, and important:
+
+- **VIP bundles `libusb-1.0.0.dylib`.** It may not use CoreMIDI at all, and may
+  instead claim the USB interface and drive the bulk endpoints directly. If so
+  the transport is not MIDI SysEx and our ALSA-based client is the wrong shape —
+  we would want libusb on Linux too, which would also sidestep the Fifth
+  finding's wedge, since that was provoked through the ALSA path.
+- The encoding of script-upload, page-create, widget-create and call-function.
+- What `ADW1Interface::heartbeat()` expects, and what happens when it is missed.
+
+That is the next thing to settle, and a MIDI-layer or libusb-layer capture of VIP
+talking to the device would settle all of it at once.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
