@@ -11,5 +11,5 @@ Jailbroken from vendor lock-in.
 
 > See `DESIGN.md` for a WIP architecture and general approach.
 
-> See `PLAN.md` for the project roadmap, goals, and next steps.
+> See `PLAN.md` for the project roadmap, goals, and next steps. This may be quite agentic and messy.
 
