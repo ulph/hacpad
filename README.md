@@ -5,11 +5,11 @@
 # hacpad
 Hardware Agnostic Control of Plugins And Daws
 
+# free from vendor lock-in
 Your controller hardware of choice, in your DAW and plugins of choice. 
+... On your operating system, and cpu architecture of choice.
 
-Jailbroken from vendor lock-in.
-
+# details
 > See `DESIGN.md` for a WIP architecture and general approach.
-
 > See `PLAN.md` for the project roadmap, goals, and next steps.
 
