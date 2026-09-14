@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Advance 25 Viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0d0f13; color: #e6e9ee;
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  header {
+    padding: 12px 18px; border-bottom: 1px solid #232833;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  .sub { color: #8892a0; font-size: 12px; }
+  .wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 18px; }
+  .feed { position: relative; max-width: 100%; }
+  img { display: block; max-width: 100%; border-radius: 6px; border: 1px solid #232833; }
+  footer { padding: 10px 18px; border-top: 1px solid #232833; color: #8892a0; font-size: 12px; }
+  code { background: #1a1e26; padding: 1px 5px; border-radius: 3px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #d4574b; margin-right: 5px; }
+  .dot.live { background: #57b98a; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Akai Advance 25 — live screen</h1>
+    <span class="sub"><span class="dot" id="dot"></span><span id="status">connecting…</span></span>
+    <span class="sub">480×272 · no rotation</span>
+  </header>
+  <div class="wrap">
+    <div class="feed">
+      <img id="feed" src="/stream.mjpg" alt="Advance 25 camera feed">
+    </div>
+  </div>
+  <footer>
+    Camera proxied from the P1 webcam server. Same shape as the P1 viewer; a
+    semantic control panel lands here once the Advance command ops are mapped.
+  </footer>
+<script>
+  const img = document.getElementById('feed');
+  const dot = document.getElementById('dot');
+  const status = document.getElementById('status');
+  img.addEventListener('load', () => { dot.classList.add('live'); status.textContent = 'live'; });
+  img.addEventListener('error', () => {
+    dot.classList.remove('live'); status.textContent = 'feed down — is the camera server on :8090 up?';
+    setTimeout(() => { img.src = '/stream.mjpg?' + Date.now(); }, 2000);
+  });
+</script>
+</body>
+</html>
