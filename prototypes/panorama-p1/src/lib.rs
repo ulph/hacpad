@@ -506,6 +506,9 @@ pub struct DeviceState {
     /// 4-LED status strip is NOT in here -- it's a one-of-N register with
     /// its own verb, not independent bits.
     lit_leds: std::collections::BTreeSet<u8>,
+    /// The status strip's single state. One register, five states -- see
+    /// `StatusLed`.
+    status_led: StatusLed,
 }
 
 impl Default for DeviceState {
@@ -519,6 +522,7 @@ impl Default for DeviceState {
             last_popup_highlight: None,
             last_message_text: None,
             lit_leds: std::collections::BTreeSet::new(),
+            status_led: StatusLed::Off,
             footer: Footer {
                 // 5 real (non-empty, so indexed_entries doesn't filter them
                 // out and skip the slot) but visually blank placeholders --
@@ -660,6 +664,65 @@ impl DeviceState {
         let mut v: Vec<u8> = self.lit_leds.iter().copied().collect();
         v.sort_unstable();
         v
+    }
+
+    /// Sets the status strip -- one register with five states, so this takes
+    /// the state itself rather than a position-or-none number.
+    pub fn set_status_led(&mut self, state: StatusLed) -> Vec<[u8; 3]> {
+        self.status_led = state;
+        status_led_messages(state)
+    }
+
+    pub fn status_led(&self) -> StatusLed {
+        self.status_led
+    }
+
+    /// Transmits EVERYTHING this struct believes, from scratch: Background +
+    /// Body, all of Header and Footer, every individually-tracked LED (both
+    /// lit and unlit, explicitly), the status strip, and any overlay that
+    /// should be showing.
+    ///
+    /// Exists because there is no read-back on this device, at all. That
+    /// makes `DeviceState` the only place "what's on screen" lives, and the
+    /// only way that belief can be true is to assert it in full rather than
+    /// assume the device happened to start where we think -- so a caller
+    /// sends this once at startup and the device is then, by construction,
+    /// in the state we claim.
+    ///
+    /// Ordering matters: Background/Header/Footer first (via `full_redraw`),
+    /// then LEDs (independent of the display), then the overlay last, since
+    /// an overlay draws on top and a Background switch would clear it.
+    pub fn full_transmission(&self) -> Vec<Vec<u8>> {
+        let mut msgs = Vec::new();
+
+        if let Some(bg) = &self.last_background {
+            msgs.extend(self.full_redraw(bg, &self.header.title_bar));
+        }
+
+        // Every known LED, explicitly on OR off -- not just the lit ones, so
+        // a stale light from before we started is actively cleared rather
+        // than left to linger unaddressed.
+        for &cc in LED_CCS {
+            let on = self.lit_leds.contains(&cc);
+            msgs.push(cc_message(cc, if on { 127 } else { 0 }).to_vec());
+        }
+        for m in status_led_messages(self.status_led) {
+            msgs.push(m.to_vec());
+        }
+
+        // Overlays last: they sit on top, and a Background switch clears them.
+        if self.message_visible {
+            if let Some(text) = &self.last_message_text {
+                msgs.push(write_message(text));
+            }
+        }
+        if self.popup_visible {
+            msgs.push(write_page_menu(&self.last_popup_items));
+            if let Some(row) = self.last_popup_highlight {
+                msgs.push(cc_message(CC_MENU_HIGHLIGHT, row).to_vec());
+            }
+        }
+        msgs
     }
 
     /// Records what's already on the real device WITHOUT sending anything --
@@ -964,14 +1027,43 @@ pub const LED_CCS: &[u8] = &[
 /// always correct regardless of prior state.
 pub const STATUS_LED_CCS: &[u8] = &[99, 100, 101, 102];
 
-/// `position`: `Some(1..=4)` to light that status position, `None` (or any other value) to clear all
-/// four. Always emits a clear message first, then (if a valid position was given) the set message --
+/// The status strip's state, as an enum -- because it IS one register with
+/// exactly five states, not a number where some values are magic and the
+/// rest are undefined. `Off` is a real state here, not a `None` meaning
+/// "absent"; there is no way to express "position 7" or "two lit at once",
+/// which matches the confirmed hardware mutex above.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StatusLed {
+    #[default]
+    Off,
+    Position1,
+    Position2,
+    Position3,
+    Position4,
+}
+
+impl StatusLed {
+    /// The CC to write 127 to for this state, or `None` for `Off` (which is
+    /// expressed by the clear message alone).
+    fn set_cc(self) -> Option<u8> {
+        match self {
+            StatusLed::Off => None,
+            StatusLed::Position1 => Some(STATUS_LED_CCS[0]),
+            StatusLed::Position2 => Some(STATUS_LED_CCS[1]),
+            StatusLed::Position3 => Some(STATUS_LED_CCS[2]),
+            StatusLed::Position4 => Some(STATUS_LED_CCS[3]),
+        }
+    }
+}
+
+/// Always emits a clear message first, then (unless the target state is `Off`) the set message --
 /// this ordering is what makes the result correct regardless of whatever was showing before, given the
 /// confirmed "0 on any of the 4 clears the shared register" behavior documented above.
-pub fn status_led_messages(position: Option<u8>) -> Vec<[u8; 3]> {
+pub fn status_led_messages(state: StatusLed) -> Vec<[u8; 3]> {
     let mut msgs = vec![cc_message(STATUS_LED_CCS[0], 0)]; // clear first, always
-    if let Some(p @ 1..=4) = position {
-        msgs.push(cc_message(STATUS_LED_CCS[(p - 1) as usize], 127));
+    if let Some(cc) = state.set_cc() {
+        msgs.push(cc_message(cc, 127));
     }
     msgs
 }
@@ -1000,19 +1092,33 @@ pub enum Led {
     /// `select_1`..`select_8` (CC 16-23), the 8 LED buttons under the faders.
     Select { index: u8 },
     /// `screen_button_0`..`screen_button_4` (CC 106-110), the row under the display.
+    /// These do NOT drive a physical lamp -- they highlight that button's LABEL on
+    /// the screen's tab row (turns red). CONFIRMED photographed (Forty-first
+    /// finding), which also corrects an earlier note claiming CC 106-110 had "no
+    /// visible effect": it does, just on the display rather than in the plastic.
     ScreenButton { index: u8 },
+    /// CONFIRMED lit on hardware (Forty-first finding, photographed): the
+    /// loop/cycle glyph turns green.
     Loop,
+    /// CONFIRMED lit: the play triangle turns green.
     Play,
+    /// CONFIRMED lit: the record circle turns red.
     Record,
+    /// CC 30. CONFIRMED to produce NO visible change (Forty-first finding:
+    /// photographed at the sensor noise floor, 38 changed pixels against an
+    /// all-off baseline where a real LED moves 300-1200). Source says it's
+    /// cursorTrack.getMute() feedback, so the CC is real -- this unit just
+    /// has no light on it. Kept addressable: "nothing lights up" is the
+    /// finding, not a reason to pretend the CC doesn't exist.
     Mute,
+    /// CC 31. Same as Mute -- no visible change (41 px).
     Solo,
-    /// CC 29. CONFIRMED on hardware to produce no visible effect when toggled --
-    /// kept addressable rather than hidden, since "nothing lights up" is itself
-    /// the finding, not a reason to pretend the CC doesn't exist.
+    /// CC 29. No visible change (52 px), consistent with the earlier
+    /// hardware note that toggling it does nothing.
     AutomationWrite,
     /// CC 25 -- a real `sendChannelController` call site (tied to menuButtonLabel
-    /// text) but never characterized as an actual LED. A live-testable candidate,
-    /// not a confirmed light.
+    /// text) but no visible change either (39 px). Kept as a documented dead end
+    /// rather than deleted.
     Cc25Uncharacterized,
 }
 
@@ -1030,6 +1136,25 @@ impl Led {
             Led::Solo => Some(31),
             Led::AutomationWrite => Some(29),
             Led::Cc25Uncharacterized => Some(25),
+        }
+    }
+
+    /// The inverse of `cc()`: which named LED lives on this CC, if any.
+    /// Lets a caller holding raw CC numbers (e.g. the older `ledsOn` list)
+    /// cross into the named world without a second hand-written table that
+    /// could drift from `cc()`.
+    pub fn from_cc(cc: u8) -> Option<Led> {
+        match cc {
+            16..=23 => Some(Led::Select { index: cc - 16 + 1 }),
+            106..=110 => Some(Led::ScreenButton { index: cc - 106 }),
+            80 => Some(Led::Loop),
+            84 => Some(Led::Play),
+            85 => Some(Led::Record),
+            30 => Some(Led::Mute),
+            31 => Some(Led::Solo),
+            29 => Some(Led::AutomationWrite),
+            25 => Some(Led::Cc25Uncharacterized),
+            _ => None,
         }
     }
 
@@ -1350,6 +1475,13 @@ pub struct InputControlState {
     ///   an absolute sweep like a fader produces.
     /// - **Unknown**: the raw value, uninterpreted.
     pub value: i16,
+    /// Monotonic stamp of WHEN this control was last touched, relative to
+    /// every other control -- the highest `seq` in a snapshot is the most
+    /// recently moved thing. Assigned server-side in `InputState::observe`
+    /// because only the server sees the true order: a client polling every
+    /// 300ms can have two controls change inside one window, and diffing
+    /// successive snapshots couldn't tell which came first.
+    pub seq: u64,
 }
 
 /// Device -> host state: the last known value/event for every semantic
@@ -1365,6 +1497,8 @@ pub struct InputControlState {
 #[serde(transparent)]
 pub struct InputState {
     controls: HashMap<String, InputControlState>,
+    #[serde(skip)]
+    next_seq: u64,
 }
 
 impl InputState {
@@ -1382,6 +1516,8 @@ impl InputState {
             InputEvent::Unknown { value, .. } => entry.value = *value as i16,
         }
         entry.last_event = Some(event.clone());
+        self.next_seq += 1;
+        entry.seq = self.next_seq;
         event
     }
 
@@ -1684,6 +1820,86 @@ mod tests {
         assert_eq!(state.get("fader_1").unwrap().value, 42);
     }
 
+    /// The highest `seq` identifies the most recently touched control, which
+    /// is what the UI highlights. Server-side because a polling client can
+    /// have two controls change inside one poll window and couldn't order
+    /// them by diffing snapshots.
+    /// `from_cc` must be the exact inverse of `cc()` for every named LED --
+    /// two hand-written tables that can drift is precisely the bug this
+    /// pairing exists to avoid.
+    #[test]
+    fn led_cc_round_trips_both_ways() {
+        let all: Vec<Led> = (1..=8).map(|index| Led::Select { index })
+            .chain((0..=4).map(|index| Led::ScreenButton { index }))
+            .chain([Led::Loop, Led::Play, Led::Record, Led::Mute, Led::Solo,
+                    Led::AutomationWrite, Led::Cc25Uncharacterized])
+            .collect();
+        for led in all {
+            let cc = led.cc().expect("every named LED has a CC");
+            assert_eq!(Led::from_cc(cc), Some(led), "round trip failed for {led:?} (cc {cc})");
+        }
+        assert_eq!(Led::from_cc(77), None, "an unmapped CC is not some LED");
+    }
+
+    /// There is no read-back on this device, so the only way `DeviceState`'s
+    /// belief can be true is to assert all of it. `full_transmission` must
+    /// therefore cover every layer -- not just the visible Background.
+    #[test]
+    fn full_transmission_asserts_every_layer_including_unlit_leds() {
+        let mut state = DeviceState::default();
+        state.switch_background(
+            Background::Mixer {
+                knobs: std::array::from_fn(|i| Knob { name: format!("N{i}"), value: format!("V{i}") }),
+            },
+            ["T1".to_string(), "T2".to_string(), "T3".to_string()],
+        );
+        state.set_led(Led::Play, true);
+        state.set_status_led(StatusLed::Position2);
+
+        let msgs = state.full_transmission();
+
+        // Every known LED is addressed explicitly, lit or not -- so a stale
+        // light from before we started gets actively cleared.
+        let led_msgs = msgs.iter().filter(|m| m.len() == 3 && LED_CCS.contains(&m[1])).count();
+        assert_eq!(led_msgs, LED_CCS.len(), "all {} LEDs addressed, not just the lit one", LED_CCS.len());
+        let play_on = msgs.iter().any(|m| m.len() == 3 && m[1] == 84 && m[2] == 127);
+        assert!(play_on, "the lit LED is sent as on");
+        let mute_off = msgs.iter().any(|m| m.len() == 3 && m[1] == 30 && m[2] == 0);
+        assert!(mute_off, "an unlit LED is sent as explicitly off");
+
+        // Status strip: clear-then-set, so the result is right regardless of
+        // what the device was showing before.
+        let status_msgs: Vec<_> = msgs.iter().filter(|m| m.len() == 3 && STATUS_LED_CCS.contains(&m[1])).collect();
+        assert_eq!(status_msgs.len(), 2, "clear then set");
+        assert_eq!(status_msgs[1][1], 100, "Position2 is CC 100");
+        assert_eq!(status_msgs[1][2], 127);
+
+        // And the Background/Header/Footer went out too (SysEx, not CC).
+        assert!(msgs.iter().any(|m| m.first() == Some(&0xF0)), "display writes included");
+    }
+
+    #[test]
+    fn input_state_seq_orders_controls_by_recency() {
+        let mut state = InputState::default();
+        state.observe(0, 10); // fader_1
+        state.observe(48, 3); // pan_encoder_1
+        state.observe(96, 127); // shift
+
+        let f = state.get("fader_1").unwrap().seq;
+        let e = state.get("pan_encoder_1").unwrap().seq;
+        let b = state.get("shift").unwrap().seq;
+        assert!(f < e && e < b, "seq must increase in observation order: {f} < {e} < {b}");
+
+        // Touching an earlier control again makes it the newest.
+        state.observe(0, 20);
+        let f2 = state.get("fader_1").unwrap().seq;
+        assert!(f2 > b, "re-touching fader_1 must make it the most recent ({f2} > {b})");
+
+        // And repeats keep advancing, so "most recent" is never ambiguous.
+        state.observe(0, 21);
+        assert!(state.get("fader_1").unwrap().seq > f2);
+    }
+
     #[test]
     fn input_state_serializes_transparently_as_a_flat_map() {
         let mut state = InputState::default();
@@ -1694,6 +1910,9 @@ mod tests {
         assert_eq!(json["fader_1"]["value"], 42);
         assert_eq!(json["fader_1"]["lastEvent"]["kind"], "Fader");
         assert!(json.get("controls").is_none());
+        // `seq` must reach the client -- it's how the UI picks which control
+        // to highlight as most-recently-moved, and a client can't derive it.
+        assert!(json["fader_1"]["seq"].is_number(), "seq is on the wire: {json}");
     }
 
     /// `Led` names the control it lights, and must land on that control's

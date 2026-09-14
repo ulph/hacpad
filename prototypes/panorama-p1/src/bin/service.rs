@@ -211,9 +211,10 @@ enum SemanticCommand {
         on: bool,
     },
     /// The 4-LED status strip is a one-of-N register, not 4 bits -- so it
-    /// keeps its own verb. `None` clears the whole strip.
-    #[serde(rename_all = "camelCase")]
-    SetStatusLed { position: Option<u8> },
+    /// keeps its own verb, and takes the state as an ENUM
+    /// (`"off"`/`"position1"`../`"position4"`) rather than a number with
+    /// magic values. There is no way to express "two lit at once".
+    SetStatusLed { state: StatusLed },
 }
 
 struct Device {
@@ -352,8 +353,8 @@ impl Device {
                     None => eprintln!("setLed: {led:?} has no CC (index out of range), nothing sent"),
                 }
             }
-            SemanticCommand::SetStatusLed { position } => {
-                for msg in status_led_messages(position) {
+            SemanticCommand::SetStatusLed { state } => {
+                for msg in self.device_state.set_status_led(state) {
                     self.default_conn.send(&msg)?;
                     thread::sleep(Duration::from_millis(2));
                 }
@@ -409,7 +410,17 @@ impl Device {
             }
         }
         if let Some(pos) = update.status_led {
-            for msg in status_led_messages(if pos == 0 { None } else { Some(pos) }) {
+            // The RAW path keeps its number-with-magic-values shape (it's the
+            // uncomposed perspective, deliberately unchanged); map it onto the
+            // semantic enum here rather than duplicating the strip's rules.
+            let state = match pos {
+                1 => StatusLed::Position1,
+                2 => StatusLed::Position2,
+                3 => StatusLed::Position3,
+                4 => StatusLed::Position4,
+                _ => StatusLed::Off,
+            };
+            for msg in status_led_messages(state) {
                 self.default_conn.send(&msg)?;
                 thread::sleep(Duration::from_millis(2));
             }
@@ -646,23 +657,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     // real device as part of the default boot state (avoids the visible
     // conflict) -- but keep them in the shared/client-facing JSON below so
     // the simulator still offers that demo content to explicitly try.
-    let mut initial_for_device = initial.clone();
-    initial_for_device.menu_items = Vec::new();
-    initial_for_device.menu_highlight = None;
-    if let Err(e) = device.apply(&initial_for_device) {
-        eprintln!("warning: failed to apply default state to device: {e}");
-    }
-
-    // Seed the semantic model (device_state) to match what was JUST written
-    // above -- otherwise it starts believing last_background is None, and
-    // hide_popup()/hide_message() silently send nothing the first time
-    // they're used (reported bug: "hiding popup does not really work").
-    // Mirrors default_state()'s own knobs/N1-8/V1-8/TB1-3 content (Mixer
-    // only renders 8 of the 16 name/value slots that get written -- the
-    // other 8 are for FaderSplit's 16-slot layout, not visible here) and its
-    // "hacpad" message, which really is showing on top of it (see the
-    // comment above about not writing the popup at boot -- the message IS
-    // written, unconditionally).
+    // Build the semantic model's full starting state, then TRANSMIT ALL OF IT.
+    //
+    // There is no read-back on this device -- none, for any field. So the
+    // model can't be reconciled against reality after the fact; the only way
+    // its belief can be true is to assert the whole thing up front and let
+    // the device follow. That's what `full_transmission` is for, and why boot
+    // no longer goes through the raw per-field path: seeding a belief without
+    // sending it is exactly how the model and the panel drift apart.
     device.device_state.seed_background(
         Background::Mixer {
             knobs: std::array::from_fn(|i| Knob {
@@ -672,7 +674,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         std::array::from_fn(|i| initial.title_bar.get(i).cloned().unwrap_or_default()),
     );
+    device.device_state.set_footer(std::array::from_fn(|i| {
+        initial.tabs.get(i).cloned().unwrap_or_else(|| " ".to_string())
+    }));
+    device.device_state.set_header_big_font(initial.bigfont.clone());
+    device.device_state.set_header_current_value(initial.current_value.clone());
+    for &cc in initial.leds_on.as_deref().unwrap_or(&[]) {
+        if let Some(led) = Led::from_cc(cc) {
+            device.device_state.set_led(led, true);
+        }
+    }
+    device.device_state.set_status_led(match initial.status_led {
+        Some(1) => StatusLed::Position1,
+        Some(2) => StatusLed::Position2,
+        Some(3) => StatusLed::Position3,
+        Some(4) => StatusLed::Position4,
+        _ => StatusLed::Off,
+    });
+    // The "hacpad" resting message genuinely IS showing on top at boot.
+    // Deliberately no popup: it would overlay the message (Thirty-first
+    // finding), so the demo popup content stays client-side only.
     device.device_state.seed_message_shown(&initial.message);
+
+    {
+        let msgs = device.device_state.full_transmission();
+        println!("Boot: transmitting full semantic state ({} messages)", msgs.len());
+        for msg in msgs {
+            if let Err(e) = device.default_conn.send(&msg) {
+                eprintln!("warning: boot transmission failed: {e}");
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
 
     let initial_map = match serde_json::to_value(&initial)? {
         serde_json::Value::Object(m) => m,

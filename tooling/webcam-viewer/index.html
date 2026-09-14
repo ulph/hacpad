@@ -120,6 +120,11 @@
   .input-field .iv { font-size: 12px; color: #eee; font-family: monospace; font-weight: bold; }
   .input-field.touched { border-color: #4a7; background: #0e1a12; }
   .input-field.pressed { border-color: #e0a030; background: #241a08; }
+  /* The single most recently moved control -- picked by the server's own
+     `seq`, not by diffing snapshots, so two controls moving inside one poll
+     window still order correctly. */
+  .input-field.latest { border-color: #6cf; box-shadow: 0 0 7px rgba(102,204,255,.75); }
+  .input-field.latest .iv { color: #9df; }
 </style>
 </head>
 <body>
@@ -1085,22 +1090,28 @@ const SEMANTIC_LEDS = [
   { label: 'play', cmd: { led: 'play' } },
   { label: 'record', cmd: { led: 'record' } },
   { label: 'loop', cmd: { led: 'loop' } },
-  { label: 'mute', cmd: { led: 'mute' } },
-  { label: 'solo', cmd: { led: 'solo' } },
-  { label: 'autoWr', cmd: { led: 'automationWrite' } },
-  { label: 'cc25?', cmd: { led: 'cc25Uncharacterized' } },
+  // These four are CONFIRMED to light nothing on this unit (photographed at
+  // the sensor noise floor vs an all-off baseline, Forty-first finding). The
+  // CCs are real and still addressable -- "nothing lights up" is the finding,
+  // not a reason to hide them -- but the UI shouldn't imply they work.
+  { label: 'mute\u00b7dead', cmd: { led: 'mute' }, dead: true },
+  { label: 'solo\u00b7dead', cmd: { led: 'solo' }, dead: true },
+  { label: 'autoWr\u00b7dead', cmd: { led: 'automationWrite' }, dead: true },
+  { label: 'cc25\u00b7dead', cmd: { led: 'cc25Uncharacterized' }, dead: true },
   ...[1, 2, 3, 4, 5, 6, 7, 8].map(i => ({ label: `sel${i}`, cmd: { led: 'select', index: i } })),
   ...[0, 1, 2, 3, 4].map(i => ({ label: `scr${i}`, cmd: { led: 'screenButton', index: i } })),
 ];
 
 (function buildSemanticLedPanel() {
   const panel = el('sem-led-panel');
-  SEMANTIC_LEDS.forEach(({ label, cmd }) => {
+  SEMANTIC_LEDS.forEach(({ label, cmd, dead }) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = label;
     btn.dataset.on = 'false';
-    btn.style.cssText = 'font-size:10px; padding:2px 5px;';
+    btn.style.cssText = 'font-size:10px; padding:2px 5px;'
+      + (dead ? ' opacity:.45; border-style:dashed;' : '');
+    if (dead) btn.title = 'CC is real and gets sent, but confirmed to light nothing on this unit';
     btn.addEventListener('click', () => {
       const on = btn.dataset.on !== 'true';
       btn.dataset.on = String(on);
@@ -1112,12 +1123,14 @@ const SEMANTIC_LEDS = [
   });
 
   const statusPanel = el('sem-status-led-panel');
-  [null, 1, 2, 3, 4].forEach(pos => {
+  // One register with five states -> an enum on the wire, not a number
+  // with magic values. There's no way to express "two lit at once".
+  ['off', 'position1', 'position2', 'position3', 'position4'].forEach(state => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = pos === null ? 'off' : `status${pos}`;
+    btn.textContent = state;
     btn.style.cssText = 'font-size:10px; padding:2px 5px;';
-    btn.addEventListener('click', () => sendSemantic({ cmd: 'setStatusLed', position: pos }));
+    btn.addEventListener('click', () => sendSemantic({ cmd: 'setStatusLed', state }));
     statusPanel.appendChild(btn);
   });
 })();
@@ -1224,6 +1237,20 @@ function applyInputSnapshot(snapshot) {
   el('input-updated').textContent = names.length === 0
     ? 'no input observed yet this connection'
     : `last poll reply: ${new Date().toLocaleTimeString()} (${names.length} control${names.length === 1 ? '' : 's'} seen)`;
+  // Which control moved most recently? The server stamps a monotonic `seq`
+  // in InputState::observe, so this is the true order -- a client diffing
+  // successive polls couldn't tell, since two controls can change inside one
+  // 300ms window.
+  let latestName = null;
+  let latestSeq = -1;
+  names.forEach(name => {
+    const seq = snapshot[name] && snapshot[name].seq;
+    if (typeof seq === 'number' && seq > latestSeq) {
+      latestSeq = seq;
+      latestName = name;
+    }
+  });
+
   names.forEach(name => {
     const field = inputFieldEls[name];
     if (!field) return; // a control reported that knownControls didn't list -- ignore rather than crash
@@ -1231,7 +1258,12 @@ function applyInputSnapshot(snapshot) {
     field.valueEl.textContent = text;
     field.root.classList.add('touched');
     field.root.classList.toggle('pressed', pressed);
+    field.root.classList.toggle('latest', name === latestName);
   });
+
+  if (latestName) {
+    el('input-updated').textContent += `  |  last moved: ${latestName}`;
+  }
 }
 
 renderSimulator();

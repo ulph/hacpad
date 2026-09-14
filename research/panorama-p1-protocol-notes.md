@@ -2093,6 +2093,61 @@ than as names:
 - `106-110`: unified into one family, `screen_button_0` .. `screen_button_4_enter` (was a mix
   of `menu_button_0`, `screen_button_N` and `menu_enter` for one physical row of five).
 
+### Forty-first finding: which LEDs are actually real -- a photographed sweep
+
+Reported that most of the new named-LED commands "do nothing, as far as I can tell. well,
+select does." The commands all parsed and sent fine, so the real question was which CCs drive a
+visible light at all. Settled by sweeping them: everything off, photograph, then one family on
+at a time, photograph each, and diff every frame against the all-off baseline. Noise floor came
+out at 38-52 changed pixels, and a real LED moves 300-1200, so the split is unambiguous:
+
+| LED | changed px | verdict |
+|---|---|---|
+| `record` (CC 85) | 1161 | real -- circle turns RED |
+| `select_1..8` (CC 16-23) | 741 | real |
+| `play` (CC 84) | 630 | real -- triangle turns GREEN |
+| `loop` (CC 80) | 293 | real -- glyph turns GREEN |
+| `screen_button_0..4` (CC 106-110) | 5590 | real, but see below |
+| `mute` (CC 30) | 38 | nothing |
+| `solo` (CC 31) | 41 | nothing |
+| `automation_write` (CC 29) | 52 | nothing |
+| CC 25 | 39 | nothing |
+
+So the impression was half right: mute/solo/automation_write/CC 25 genuinely light nothing on
+this unit, while play/record/loop/select/screen_button all work. CC 29 matches its existing
+"toggling produces no visible effect" note; CC 30/31 come from real `cursorTrack.getMute()`/
+`getSolo()` call sites in the driver source, so the CCs are genuine -- this hardware just has no
+lamp on them.
+
+**CC 106-110 corrected**: an earlier note recorded these as having "no visible effect... tested
+on hardware with the tab row actually populated". They DO have an effect -- they highlight that
+button's LABEL on the screen's tab row (it turns red) rather than lighting anything in the
+plastic. The earlier test presumably looked for a physical lamp. Photographed with all five on:
+the whole TA/TB/TC/TD/TE row goes red.
+
+### Full transmission at boot -- the only way an un-readable device can be trusted
+
+Direct instruction: "you need to set the last state for all semantic commands, and do an initial
+full transmission with these. you have no way to probe the state from the device thus you must
+keep it and assume device follows."
+
+That's the correct consequence of this device having NO read-back on any field. `DeviceState`
+already held the belief; what was missing was asserting it. Added
+`DeviceState::full_transmission()`, which emits Background+Body, all of Header and Footer, every
+known LED explicitly on OR off (so a stale light from before startup is actively cleared rather
+than left unaddressed), the status strip clear-then-set, and finally any overlay -- overlays
+last, since they draw on top and a Background switch clears them. `service.rs` boot now builds
+the full starting state and transmits it, instead of seeding a belief it never sent (which is
+exactly how model and panel drift apart). Confirmed live: 29 messages at boot, photographed --
+"hacpad" message showing, status position 1 lit, loop green and record red per the default LED
+set, play correctly dark since it isn't in that set.
+
+Also made the status strip an enum (`StatusLed::Off`/`Position1..4`) rather than an
+`Option<u8>` with magic values -- it is one register with five states, and the type now says so:
+there is no way to express "position 7" or "two lit at once". The raw per-field path keeps its
+number shape (it's the deliberately uncomposed perspective) and maps onto the enum at the
+boundary.
+
 The device's own GLOBAL (non-DAW) view has explicit controls for assigning physical
 controls to CC numbers — raising the question of whether there's some bootstrap/handshake
 where the P1 tells a connected host (or is told) what each physical control is currently
