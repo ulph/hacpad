@@ -833,6 +833,34 @@ with the real iLok authorization, device passed through, usbmon on the Linux hos
 That is the recommended path; the per-10-min firmware loop was stopped here as it
 had reached a firm negative.
 
+## Twenty-first — the ADDF asset table, and the bind is numeric (not name-hashed)
+
+The asset region (fw_08100000) is a table of 53 **ADDF** blocks, each
+`[size][ADDF][type:2][16-byte id][data]`: 1 Lua script (the note-rain, type
+0x1000), 14 PNGs (0x1400), and ~38 fonts/data (types 0x0100/0x0f00, ~30 KB
+each). The 16-byte id is an MD5-like content/name hash.
+
+Two findings:
+
+1. The firmware does NOT reference the note-rain asset's hash anywhere in code,
+   so the firmware never sets up that widget itself -- the standalone pages are
+   native, and the Lua widget path is driven only by a host (VIP). The
+   "trace the firmware's own note-rain setup" lead is therefore empty.
+
+2. **Re-examining op 0x3a's hash (0x08066318) is a positive result.** It hashes a
+   3-4 byte key built from the message's widget/script IDs (bytes at sp[4..7]),
+   NOT an asset name. The Jenkins constant 0xFEEDBEF3 is just the internal
+   HASHTABLE function that 0x08066480 uses to store/resolve widgets by numeric
+   id. So binding a widget to a script is by NUMERIC ID, and there is no
+   name-hash we must reproduce.
+
+**This reopens the firmware-construction path.** The full recipe is expressible
+with numeric ids only: create_page(id) -> create_widget(id,type) ->
+create_slot(id)+load(id,code) -> bind(widget_id, script_id) [op 0x3a] -> set
+geometry [op 0x2f/sibling] -> attach widget to page -> set_active_page [op 0x10].
+It is still all-or-nothing to test, but it is constructible without VIP. Next:
+pin the page-create and widget->page-attach ops (0x0d-0x11) and the geometry op.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
