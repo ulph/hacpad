@@ -890,6 +890,33 @@ though the panel stays blank until the whole chain is right. Next tick: extract
 each op's exact byte/arg layout, build the sequence in a Rust binary, and drive
 it while watching per-op replies and the camera.
 
+## Twenty-third — the compositor and the REAL attach op (0x0e)
+
+Found the page render loop at 0x08063A54: given the active page id, it reads
+pageTbl[page].[0] (widget count); if nonzero it iterates the page's widget-slot
+array at pageTbl[page].[4] (8-byte slots) and, per slot, uses {slot[0] (byte),
+slot[2] (halfword)} as the key to look up the widget (0x080639FC) and draw it.
+
+So slots must be filled with widget references. The op that does this is **op
+0x0e = add_widget_to_page** (worker 0x08062FE8), NOT op 0x11 (which only touched
+the hashtable). op 0x0e takes (page_u8, f0_u8, f1_u14, f2_u14, f3_u14), finds the
+first free slot, and writes slot[0]=f0, slot[2]=f1, slot[4]=f2, slot[6]=f3 (the
+write path is at 0x08063094). It de-dupes against existing slots. {f0,f1} are the
+widget-lookup key the render reads; f2/f3 are the remaining slot halfwords
+(geometry). op 0x0f is a sibling variant (worker 0x0806321C).
+
+So the first recipe run used the WRONG attach (op 0x11). The corrected recipe
+uses op 0x0e. The full run confirmed create_page/widget/slot/load/bind all ACK
+(op 0x0d create_page replies in a non-standard channel form but set_active_page
+accepting the page proves it worked). Camera was down during the run so the panel
+state is unverified; recipe.rs now uses op 0x0e with f0/f1/f2/f3 swept via env
+(F0,F1,F2,F3) for the next verify pass.
+
+Remaining unknowns to sweep once the camera is back: the {f0,f1} key encoding
+(widget id vs type+id), the create_widget type args (WA,WB), the bind flag (BF),
+and whether geometry (f2,f3) must be nonzero or draw_rect(0,0,480,272) fills
+regardless.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
