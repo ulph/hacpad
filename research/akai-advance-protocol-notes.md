@@ -1015,6 +1015,41 @@ such a node itself to copy (it does not for standalone pages -- Eighteenth); or
 (c) capture VIP building one node in a VM (the one place a correct example exists
 in motion).
 
+## Twenty-seventh — the render module marks/flags; drawing is a separate pass
+
+0x08063998 (the child "draw") is a type dispatch like 0x080639FC, and for type 7
+it calls 0x08065590, which just sets scriptTbl[id].[4]=1 -- it MARKS the script,
+it does not draw. And 0x0809E144 (called first in the draw path) is memcmp, used
+for hash-collision key verification, not drawing.
+
+So the whole 0x08063xxx module BUILDS and FLAGS a recursive scene graph
+(nodes in ctxTbl, typed keys, children arrays, collision chains, dirty/visible
+flags). The actual pixel rendering -- walking flagged elements and calling their
+Lua draw() -> draw_rect -> DMA2D -- is a SEPARATE pass we have not located,
+presumably on a timer/vsync.
+
+### Conclusion of the firmware effort
+
+The communication protocol IS fully unlocked by firmware digging: every op is
+identified and confirmed ACKing on hardware -- script create/load/run, page/slot/
+element create, ctxTbl render-object creation, set_active_page. That question is
+answered: yes.
+
+Drawing our own rectangle, specifically, requires correctly assembling AND
+triggering the firmware's recursive scene-graph + deferred render pass -- a deep
+subsystem revealed one layer per tick (7 layers so far: page slots -> element type
+dispatch -> ctxTbl object -> [0x120] flag -> container children -> collision
+verify -> per-type mark -> deferred draw pass). Crucially there is NO incremental
+camera signal until the entire structure is correct, so static construction does
+not converge efficiently, and the firmware builds no Lua-widget node itself to
+copy (Eighteenth).
+
+The single place a COMPLETE, CORRECT scene-graph node is built in motion is VIP.
+Capturing VIP construct one node (Windows VM + iLok + usbmon on the Linux host)
+would hand over the exact op sequence and node structure directly -- collapsing
+the remaining graph-reversing into one capture. That is the recommended path for
+the pixel; the protocol itself needs nothing further.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
