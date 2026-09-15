@@ -917,6 +917,37 @@ Remaining unknowns to sweep once the camera is back: the {f0,f1} key encoding
 and whether geometry (f2,f3) must be nonzero or draw_rect(0,0,480,272) fills
 regardless.
 
+## Twenty-fourth — full recipe ACKs end-to-end; one draw-trigger from pixels
+
+Big step. The render's widget lookup (0x080639FC) is a TYPE DISPATCH on the slot:
+slot[0] = element type (1-13), slot[2] = id, key = slot[0] | (slot[2]<<16).
+**Type 7 -> the script module** (0x080655A0), which reads scriptTbl[slot[2]].[4]
+directly. So a Lua element is simply slot[0]=7, slot[2]=script_id -- NO separate
+create_widget or hash-bind needed. That collapses the recipe to:
+
+  create_page(page, 1)            op 0x0d
+  create_slot(script_id)          op 0x39
+  load(script_id, draw-chunk)     op 0x3b
+  add_widget_to_page(page, 7, script_id, geom...)  op 0x0e   (type=7)
+  set_active_page(page)           op 0x10
+
+**All five ACK 0x40 cleanly on hardware** (fresh page 30/script 200). This is the
+first fully-accepted construction. But the panel stays blank.
+
+Why: after 0x080639FC validates the element (returns scriptTbl[id].[4]=1, loaded),
+the render loop does a Jenkins-hashtable lookup in 0x2000F35C for the element's
+DRAW CONTEXT (origin/geometry) and SKIPS the element if that entry is null. The
+op that inserts that context is op 0x11 (worker 0x080564C4 -> 0x080633F8, same
+0x2000F35C table, inserts a bidirectional {key->value} pair). Adding op 0x11 with
+key {type=7, id=script} did not yet light it up -- the key encoding op 0x11 hashes
+must be matched exactly to the key the render hashes ({slot[0], slot[2] bytes}).
+
+Remaining for pixels (next tick): match op 0x11's insert key to the render's
+lookup key byte-for-byte (disassemble both hash inputs), OR determine whether the
+element also needs a make-dirty/refresh trigger (the firmware note-rain script
+calls lua_widget_make_dirty(WID) and set_hook_enabled; our bare draw() may never
+be marked dirty). recipe.rs drives the whole sequence with env-swept params.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:

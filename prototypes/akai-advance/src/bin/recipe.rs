@@ -49,9 +49,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let chunk = b"function draw(a) draw_rect(0,0,480,272,0xffff0000) end";
 
+    // Simplified recipe: a slot of TYPE 7 references a Lua script directly by id
+    // (render dispatch 0x80639FC: type 7 -> scriptTbl[slot[2]]). No separate
+    // widget/bind needed.
+    let etype = g("ETYPE", 7) as u8;   // 7 = lua-script element
+    let f1 = g("F1", script);          // slot[2] = script id
+    let f2 = g("F2", 0);               // slot[4] geometry
+    let f3 = g("F3", 0);               // slot[6] geometry
+
     let mut steps: Vec<(&str, Vec<u8>)> = Vec::new();
     steps.push(("create_page", frame(0x0d, &[page, 1])));
-    steps.push(("create_widget", frame(0x00, &[u14(wid)[0], u14(wid)[1], wtype_a, wtype_b])));
     steps.push(("create_slot", frame(0x39, &u14(script))));
     {
         let mut p = Vec::new();
@@ -60,21 +67,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         p.extend_from_slice(&pack(chunk));
         steps.push(("load", frame(0x3b, &p)));
     }
-    steps.push(("bind", frame(0x3a, &[u14(wid)[0], u14(wid)[1], bind_flag, u14(script)[0], u14(script)[1]])));
-    // op 0x0e = add_widget_to_page(page_u8, f0_u8, f1_u14, f2_u14, f3_u14). The
-    // render loop keys widget lookup on {slot[0]=f0, slot[2]=f1}; f2/f3 land in
-    // slot[4]/[6] (geometry). f0/f1 must resolve to our widget id -- swept via env.
-    let f0 = g("F0", wid) as u8;
-    let f1 = g("F1", 0);
-    let f2 = g("F2", 0);
-    let f3 = g("F3", 0);
-    let mut e = vec![page, f0];
+    let mut e = vec![page, etype];
     e.extend_from_slice(&u14(f1));
     e.extend_from_slice(&u14(f2));
     e.extend_from_slice(&u14(f3));
     steps.push(("attach(0x0e)", frame(0x0e, &e)));
+
+    // op 0x11 inserts the draw-CONTEXT into hashtable 0x2000F35C that the render
+    // looks up after validating the element. Handler args:
+    //   [a1_u14, a2_u8, a3_u14, a4_u8]; worker keys on {a2|(a1<<16)}.
+    // Render key is {slot[0]=type, slot[2]=id} = etype | (id<<16), so a1=id,
+    // a2=etype makes key1 match. a3/a4 = the context payload (swept).
+    if g("CTX", 1) == 1 {
+        let a3 = g("A3", 0);
+        let a4 = g("A4", 0) as u8;
+        let ctx = vec![u14(f1)[0], u14(f1)[1], etype, u14(a3)[0], u14(a3)[1], a4];
+        steps.push(("ctx(0x11)", frame(0x11, &ctx)));
+    }
     steps.push(("set_active_page", frame(0x10, &[page])));
-    let _ = (slot, attach_b); // retained for reference
+    let _ = (wid, wtype_a, wtype_b, bind_flag, slot, attach_b, u14);
 
     // MIDI in/out
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
