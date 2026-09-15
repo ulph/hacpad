@@ -978,6 +978,43 @@ binding it to the script) rather than the script directly, and what sets [0x120]
 (a make-dirty/refresh op). The plumbing (page, slot, script load, attach) is all
 confirmed ACKing; this render-object registration is the final missing link.
 
+## Twenty-sixth — op 0x11 builds the render-object; the render is a scene graph
+
+Correcting the Twenty-fifth finding: op 0x11's inserter (0x080633F8) does NOT
+store a small value. On a new key it mallocs a **0x128-byte render-object**, sets
+[obj+0]=key, [obj+4]=value, [obj+0x104]=1 (a child count), and [obj+0x120]=4
+(the drawable flag) automatically (0x080634C8). So op 0x11 IS the render-object
+creator, and [0x120]==4 is set for free.
+
+But the render's draw path (0x08063B52) then treats the object as a CONTAINER:
+it iterates children [obj + r5*4] for r5=1..[obj+0x104], validates each key via
+0x080639FC, and draws via 0x08063998 / 0x0809E144 -- i.e. the display is a
+recursive **scene graph** of typed element keys, not a flat list. [obj+4]
+(=op 0x11's value) is child[1].
+
+Tried wiring op 0x11's value to the script element key {7,script}: still blank.
+So the correct tree shape for a leaf Lua-draw element is not yet right -- the leaf
+draw (0x08063998 -> 0x0809E144) needs a specific node structure we have not
+matched.
+
+### Honest status
+
+Everything in the documented protocol now works and ACKs: frame, all ~50 ops,
+script create/load/run, page/slot/element create, set_active_page, and the
+ctxTbl render-object creation. What remains between here and a drawn rectangle is
+assembling the firmware's recursive scene graph correctly for a leaf script draw
+-- a genuinely deep sub-system (containers, children, per-node context, the
+0x8063998/0x809E144 draw dispatch). Each tick narrows it but reveals another
+layer. This is the hardest part and the one place blind construction does not
+converge quickly, because the panel gives no signal until the whole node is
+right.
+
+Next options: (a) keep tracing the leaf-draw dispatch (0x08063998 -> 0x0809E144)
+to learn the exact node structure; (b) revisit whether the firmware ever builds
+such a node itself to copy (it does not for standalone pages -- Eighteenth); or
+(c) capture VIP building one node in a VM (the one place a correct example exists
+in motion).
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
