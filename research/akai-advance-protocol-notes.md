@@ -948,6 +948,36 @@ element also needs a make-dirty/refresh trigger (the firmware note-rain script
 calls lua_widget_make_dirty(WID) and set_hook_enabled; our bare draw() may never
 be marked dirty). recipe.rs drives the whole sequence with env-swept params.
 
+## Twenty-fifth — the render gate: a pooled render-object with [0x120]==4
+
+Disassembled the render loop's context lookup (0x08063A9E-0x08063B52) and matched
+it to the inserters. The key IS matched: both the render and op 0x11 hash the
+4 bytes {type, 0, id_lo, id_hi} = type | (id<<16) with the same Jenkins constants,
+and for our type-7 element that is 7 | (script_id<<16). So key-matching was not
+the problem.
+
+The real gate: after hashing, the render does
+  r4 = ctxTbl_pool[hash]; if r4==0 skip;
+  r4 = pool_base + r4;      (entries are offsets into a pool)
+  if [r4, #0x120] == 4  -> DRAW (0x08063B52), else follow [r4,#0x118] chain / skip.
+So the render needs a real **render-object** (>=0x124 bytes) registered in ctxTbl
+under the element key, AND its field [0x120] must equal 4. op 0x11 only inserts a
+small {key->value} pair (value was 0 in our run -> lookup returns 0 -> skip), so
+op 0x11 is NOT how the render-object is created.
+
+That render-object is what create_widget (op 0x00) builds -- 0x08064FCC
+initialises exactly this kind of object (sets fields at +0x10/+0x14/+0x18...).
+So the earlier "type 7 => no widget needed" simplification was incomplete: the
+element still needs a widget/render-object registered in ctxTbl under its key,
+and [0x120]==4 (likely a dirty/drawable state a make-dirty sets).
+
+Next tick: determine what registers a render-object into ctxTbl and under which
+key (trace create_widget 0x00 -> 0x08064FCC and siblings for a 0x2000F35C insert),
+whether the page slot should reference a WIDGET (type + widget_id, with op 0x3a
+binding it to the script) rather than the script directly, and what sets [0x120]=4
+(a make-dirty/refresh op). The plumbing (page, slot, script load, attach) is all
+confirmed ACKing; this render-object registration is the final missing link.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
