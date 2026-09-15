@@ -861,6 +861,35 @@ geometry [op 0x2f/sibling] -> attach widget to page -> set_active_page [op 0x10]
 It is still all-or-nothing to test, but it is constructible without VIP. Next:
 pin the page-create and widget->page-attach ops (0x0d-0x11) and the geometry op.
 
+## Twenty-second — page ops cracked; the full recipe is now assembled (numeric)
+
+- **op 0x0d = create_page(page_id, num_widgets)** (worker 0x080631B0). page_id
+  is range-checked (1..0x200), pageTbl at 0x2000EF5C is indexed by page_id*8;
+  it frees any existing page then mallocs an array of num_widgets 8-byte slots
+  (each slot: widget-ref + geometry halfwords at +2/+4/+6) and stores it at
+  pageTbl[id].[4], with the widget count at pageTbl[id].[0].
+- **op 0x11 = attach / page-slot write** (worker 0x080564C4 -> 0x080633F8).
+  0x080633F8 is the SAME Jenkins-hashtable function (0xFEEDBEF3) used by the
+  widget<->script bind, keyed by a 4-byte numeric key -- so the page->widget
+  relationship is stored in the shared hashtable by numeric ids, confirming
+  again that everything is numeric-id addressed.
+
+The recipe is now fully assembled, all numeric:
+
+  1. create_page(page_id, n)          op 0x0d
+  2. create_widget(widget_id, type)   op 0x00
+  3. attach widget to page slot       op 0x11 (+ geometry)
+  4. create_slot(script_id)           op 0x39
+  5. load(script_id, draw-chunk)      op 0x3b
+  6. bind(widget_id, script_id)       op 0x3a
+  7. configure_widget(style/geom)     op 0x2f
+  8. set_active_page(page_id)         op 0x10
+
+Every op ACKs or NAKs individually, so the construction is DEBUGGABLE per-op even
+though the panel stays blank until the whole chain is right. Next tick: extract
+each op's exact byte/arg layout, build the sequence in a Rust binary, and drive
+it while watching per-op replies and the camera.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
