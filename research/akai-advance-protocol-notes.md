@@ -1236,6 +1236,25 @@ single VIP capture is the decisive unblock. Recommendation to the user: either
 let the loop pivot to tracing the firmware's own page render, or switch to VIP
 capture; continuing to enumerate object tables blind is low value.
 
+## Thirty-sixth — root cause fully traced; loop stopped early (stewardship)
+
+draw_rect's context CREATE path (0x080662B0) mallocs a 0x34-byte context node but
+its framebuffer TARGET is inherited from a parent context; the created node has
+no valid surface unless a parent draw context (with a real framebuffer) was
+pushed first. That parent push is done by the widget-render infrastructure BEFORE
+a real widget's draw(); the type-13 "run script" path does not push it, so our
+draw() runs with no draw surface and draw_rect paints nowhere (LEDs work because
+they bypass the graphics target entirely).
+
+So the LCD draw needs: a real widget object in its per-type table + the render
+pushing its parent context + a framebuffer target -- the full engine, which
+static reversing diverges through (8+ tables) with no incremental camera signal.
+
+Stopped the 3-hour host-mode loop after 6 ticks (~1h). Option 1's stated goal --
+enter host/FW mode so the firmware yields -- was ACHIEVED (cmd 3 sub 6). The
+follow-on (persistent LCD draw) is a separate, deeper problem that does not yield
+to blind reconstruction; the decisive unblock is one VIP page-render capture.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
