@@ -1213,6 +1213,29 @@ sequence + which table each object goes in). Continuing the loop per instruction
 but flagging that the draw reconstruction specifically is unlikely to yield
 without that example.
 
+## Thirty-fifth — draw reconstruction is diverging; honest stewardship note
+
+Chased type 11 (the "widget with graphics context", vs type 13 = "run script,
+no context"): its objects live in table 0x20010CF0 with a big struct
+(geometry at +0x14E, a flag at +0x151), and the script module only READS that
+table -- the creator is yet another op elsewhere. That makes 8+ interlocking
+tables (page, widget 0x2000EF54, ctx 0x2000F35C, ctx36c 0x2000F36C, scriptTbl
+0x2000F360, tblC 0x20010CE4, 0x20010CF0, plus per-type object tables), and every
+tick this loop the draw lead branches into ANOTHER table rather than closing.
+
+Consistent finding across ticks 1-5: option 1's mode/host work SUCCEEDED
+(cmd 3 sub 6 host-mode takeover confirmed; draw() runs; LEDs respond), but
+reconstructing the firmware's per-type widget/draw setup BLIND is not converging
+and shows no incremental camera signal. This is now well-established, not a
+maybe.
+
+The one remaining HIGH-SIGNAL static lead is to trace the firmware's OWN working
+draw (the SETUP page renders text) to see how it establishes the graphics
+context/target -- a worked example inside the firmware itself. Failing that, a
+single VIP capture is the decisive unblock. Recommendation to the user: either
+let the loop pivot to tracing the firmware's own page render, or switch to VIP
+capture; continuing to enumerate object tables blind is low value.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
