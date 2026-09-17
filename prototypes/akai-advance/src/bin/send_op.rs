@@ -33,7 +33,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let n = payload.len();
-    let mut msg = vec![0xF0, 0x47, 0x00, 0x2F, 0x02, op, ((n >> 7) & 0x7F) as u8, (n & 0x7F) as u8];
+    let cmd = std::env::var("CMD").ok().and_then(|x| u8::from_str_radix(x.trim_start_matches("0x"),16).ok()).unwrap_or(0x02); // CMD_ENV
+    let mut msg = vec![0xF0, 0x47, 0x00, 0x2F, cmd, op, ((n >> 7) & 0x7F) as u8, (n & 0x7F) as u8];
     msg.extend_from_slice(&payload);
     msg.push(0xF7);
 

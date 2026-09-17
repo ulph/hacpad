@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("function draw(a) for i=0,{hi} do led_control_set_level_midi(i,{col}) end \
          lua_widget_make_dirty(13,{script}) end")
     } else {
-        format!("function draw(a) draw_rect(0,0,480,272,0xffff0000) \
+        format!("function draw(a) draw_rect(0,0,480,272,0xff0000ff) \
                  lua_widget_make_dirty(13,{script}) end")
     };
     let chunk = chunk_s.as_bytes();

@@ -1133,6 +1133,33 @@ Mode" first, via a cmd-4/5 global-setting message setting "Requested FW Mode".
 That is the next step, and it is exactly what VIP does first -- so a VIP capture
 would reveal the precise mode value and handshake immediately.
 
+## Thirty-first — HOST MODE COMMAND FOUND: cmd 3 sub 6 (state 0xe/0xd mode machine)
+
+Traced the standalone gate: at 0x08057C44 the firmware does get_state(0xD); if it
+== 2 it SKIPS "Please launch the VIP Software" (host connected). States are a
+small array via get_state 0x08058D08 / set_state 0x08058D18 (index -> [.]+4).
+
+The mode state machine 0x0805FD88 (a poll) reads current mode = state 0xD and
+target mode = state 0xE; when they differ it transitions (case 1/2 calls
+0x0805A27C to do host setup, and on success set_mode(target); else back to 0).
+set_mode 0x0805FC98(v) writes states 0xD and 0xE = v.
+
+**The SysEx entry: top-level cmd 3 sub 6** (frame `F0 47 00 2F 03 06 00 00 F7`).
+Handler 0x0805A7C4 saves current mode then set_state(0xE, 3) -- requests host mode.
+(cmd 3 dispatches on byte[9] via the 9-entry table at 0x0805A778; sub 7 = restore.)
+
+**Confirmed on hardware:** sending `F0 47 00 2F 03 06 00 00 F7` BLANKS the panel --
+the firmware drops its standalone SETUP UI and yields the display. This is the
+host-mode takeover we were missing; the firmware stops owning the screen.
+
+Still not drawing after entry: sending the display recipe in host mode leaves the
+panel blank, and the LED colour still shows the default. Open: whether host mode
+stops the standalone page poller (so our set_active_page path no longer renders
+and VIP instead pushes frames another way), or the transition needs 0x0805A27C to
+fully complete first (a few poll cycles) before draws take. Next: settle timing
+(wait for transition), and check whether draw() still runs in host mode, then find
+the host-mode draw/push path.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
