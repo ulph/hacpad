@@ -1160,6 +1160,19 @@ fully complete first (a few poll cycles) before draws take. Next: settle timing
 (wait for transition), and check whether draw() still runs in host mode, then find
 the host-mode draw/push path.
 
+## Thirty-second — draw_rect gap pinned to a null draw-context (0x2000F36C)
+
+In host mode our draw() STILL runs (LEDs respond) but draw_rect still fails --
+so the LCD gap is independent of standalone/host mode. Root cause pinned:
+draw_rect's resolver 0x08066480 -> 0x08066318 first does
+`ldr r4,[0x2000F36C]; cmp r4,#0; beq fail`. The 0x2000F36C "current draw
+context" is NULL for us, so draw_rect bails before drawing. That context is a
+per-widget clip/target pushed by the widget renderer BEFORE calling the widget's
+draw(); draw_script (0x08065508) sets only origX/origY, not this context. So the
+missing piece is whatever pushes 0x2000F36C for the element being drawn -- likely
+in the 0x08063A54 ctx pass for a properly-formed ctxTbl object. Next: find who
+writes 0x2000F36C (the context push) during a real widget draw and reproduce it.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
