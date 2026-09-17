@@ -51,8 +51,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // to test whether draw() is being called at all (LEDs don't depend on the
     // draw target/clip). Otherwise the normal red-fill + self-remark.
     let chunk_s = if std::env::var("DIAG").as_deref() == Ok("led") {
-        "function draw(a) for i=0,127 do led_control_set_level_midi(i,127) end \
-         lua_widget_make_dirty(13,".to_string() + &script.to_string() + ") end"
+        let col = std::env::var("LEDCOLOR").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(127);
+        let hi = std::env::var("LEDHI").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(200);
+        format!("function draw(a) for i=0,{hi} do led_control_set_level_midi(i,{col}) end \
+         lua_widget_make_dirty(13,{script}) end")
     } else {
         format!("function draw(a) draw_rect(0,0,480,272,0xffff0000) \
                  lua_widget_make_dirty(13,{script}) end")

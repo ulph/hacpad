@@ -1104,6 +1104,35 @@ The rectangle specifically is gated behind draw_rect's clip/target context (the
 static construction. This is precisely what one VIP capture (a correct page render
 in motion) would resolve directly.
 
+## Thirtieth — ROOT CAUSE: the firmware owns the UI until host/"FW Mode" is entered
+
+Sweeping LED colours (0xFF / 0xFF00 / 0xFF0000) left the pads showing the SAME
+pattern regardless of value, and the LCD never keeps our draw. The common cause:
+in standalone mode the firmware re-asserts its own UI (pads, screen) every frame,
+overwriting anything we set. This is why the idle panel says "Please launch the
+VIP Software" -- there is a HOST MODE where the firmware yields the UI, and VIP
+enters it before doing anything. We never did, so we have been fighting the
+firmware.
+
+Evidence and path:
+- Settings table at 0x080CA2D0, 0x20-byte descriptors. **"FW Mode" is setting
+  index 3** (descriptor 0x080CA330: name, accessor 0x08058F81, min 3, max 0x0E),
+  and **"Requested FW Mode" is index 4**. So FW Mode is a value in 3..14; one of
+  those is the VIP/host-controlled mode.
+- VIP's own log string "received global_setting request fw mode %d" confirms VIP
+  changes FW mode via a global-setting command. The firmware's global-setting
+  commands are the top-level cmd 4 (F0 47 00 2F 04 ..., tbb sub 0..8) and cmd 5
+  (F0 47 00 2F 05 ..., tbh sub 0..0x0B) -- distinct from the cmd-2 display ops.
+
+So the LED colour encoding IS understood (pads at remapped idx 0x17-0x1E take a
+24-bit RGB value via 0x0805BC80), and the display recipe IS built and our draw()
+IS called -- but none of it persists because the firmware overwrites it. The
+missing unlock for FULL control of BOTH the LCD and LEDs is entering host/"FW
+Mode" first, via a cmd-4/5 global-setting message setting "Requested FW Mode".
+
+That is the next step, and it is exactly what VIP does first -- so a VIP capture
+would reveal the precise mode value and handshake immediately.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
