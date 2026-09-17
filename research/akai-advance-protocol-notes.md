@@ -1173,6 +1173,25 @@ missing piece is whatever pushes 0x2000F36C for the element being drawn -- likel
 in the 0x08063A54 ctx pass for a properly-formed ctxTbl object. Next: find who
 writes 0x2000F36C (the context push) during a real widget draw and reproduce it.
 
+## Thirty-third — host-mode + bind still blank; draw_rect keys by coordinates
+
+Tested cmd-3-sub-6 host mode + the full recipe WITH bind (op 0x3a, which inserts
+into the 0x2000F36C table draw_rect reads): still blank. Re-verified draw_rect's
+context key at 0x08053474: it is {arg1(byte), arg2(halfword)} = the first two
+draw_rect args = the x,y COORDINATES (r6=arg1, r5=arg2, unmodified). So the
+resolver 0x08066480 -> 0x08066318 hashes {x,y} and needs an EXACT 0x2000F36C
+entry at that coordinate key. op 0x3a inserts under {b5, script_id}, which does
+not match {0,0} for a full-screen draw. So either the mapping is a spatial/layer
+lookup we are mis-modelling, or draw() is being invoked outside the page-render
+pass that pushes the [0x2000F36C] root (LEDs work because they need no context).
+
+Open leads for later ticks (not yet done): (a) confirm whether [0x2000F36C] is
+null vs missing-entry when our draw() runs (add a probe); (b) the page-change
+handler 0x0806703C fills the page background via 0x0806091C from a colour const
+at 0x080AB338 -- a possible "solid background" path; (c) try draw_system_text /
+draw_image which may resolve context differently. Host-mode takeover
+(cmd 3 sub 6) remains the confirmed win of this run.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
