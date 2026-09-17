@@ -1192,6 +1192,27 @@ at 0x080AB338 -- a possible "solid background" path; (c) try draw_system_text /
 draw_image which may resolve context differently. Host-mode takeover
 (cmd 3 sub 6) remains the confirmed win of this run.
 
+## Thirty-fourth — element-type sweep all blank; draw engine is per-type multi-table
+
+Empirical: in host mode, swept slot element TYPE = 1,3,5,8,9,11,12,13 with the
+basic recipe (create_page, create_slot, load blue-draw script, attach type=T,
+set_active_page). ALL blank -- none paints. Static reason: each draw-dispatch
+type keys a DIFFERENT object table (type 13 -> scriptTbl 0x2000F360; type 11 ->
+0x20010CF0 with a big widget struct at +0x144/+0x14E; others -> yet others), so a
+given type only draws if its object was created in ITS table by the matching op.
+The draw engine is thus a per-type, multi-table system (page, widget 0x2000EF54,
+ctx 0x2000F35C, ctx36c 0x2000F36C, tblC 0x20010CE4, 0x20010CF0, scriptTbl) and
+static reversing keeps DIVERGING into more tables rather than converging, with no
+incremental camera signal until an entire per-type setup is correct.
+
+Honest assessment of option 1: the host-mode takeover (cmd 3 sub 6) is a solid,
+confirmed win and the LED path responds, but reconstructing the full per-type
+widget/draw setup blind -- without a single worked example -- is not converging.
+This is the textbook case for capturing ONE VIP page render (the exact op
+sequence + which table each object goes in). Continuing the loop per instruction,
+but flagging that the draw reconstruction specifically is unlikely to yield
+without that example.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:
