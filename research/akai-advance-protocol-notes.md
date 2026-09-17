@@ -1050,6 +1050,60 @@ would hand over the exact op sequence and node structure directly -- collapsing
 the remaining graph-reversing into one capture. That is the recommended path for
 the pixel; the protocol itself needs nothing further.
 
+## Twenty-eighth — BREAKTHROUGH: draw_page, slot TYPE 13 = Lua draw
+
+0x08063304 = draw_page(r0=mode, r1=page): iterates pageTbl[page].[4] slots and
+dispatches by slot[0] (type 1-13) via a jump table (0x0806333E). **Slot TYPE 13
+routes to draw_script (0x08065508)** with r0=slot[2]=script_id, r1=slot[4]=originX,
+r2=slot[6]=originY. So the correct element type for a Lua-drawing widget is 13,
+NOT 7 (7 was a different dispatch table: validity/mark). All earlier runs used the
+wrong type.
+
+draw_script (0x08065508): if the script slot's mark-flag scriptTbl[id].[4] != 0,
+it sets origX/origY globals, lua_getglobal "draw", lua_getglobal "__ARG",
+lua_pcall(draw, __ARG) -- i.e. calls our Lua draw(__ARG) -- then clears [4]=0 (draw
+once per mark). create_slot and load both set [4]=1, so a freshly loaded script is
+marked ready.
+
+Tried the recipe with type 13 (create_page, create_slot, load, attach type=13,
+set_active_page): every op ACKs, but still blank. draw_page has NO direct BL
+callers, so it is invoked by a deferred poller (keyed on active page 0x200011D0 /
+a page-dirty flag) or via a function pointer. The remaining gap is the TRIGGER
+that runs draw_page for our page (and/or the draw target/clip context draw_rect
+needs). recipe.rs default element type corrected to 13.
+
+## Twenty-ninth — PROVEN: our Lua runs on the device (LEDs); draw_rect gap remains
+
+Decisive bisection via an LED diagnostic: a loaded script whose draw() calls
+led_control_set_level_midi(i,127) in a loop LIT THE PADS (photographed: pads went
+red/pink/green). So our own Lua is loaded, and its draw() is being CALLED by the
+firmware's render path -- confirmed on hardware. We can execute arbitrary code on
+the device and drive its hardware.
+
+The full draw chain is mapped and working up to this point:
+- op 0x0d create_page(page, n); op 0x39 create_slot; op 0x3b load; op 0x0e
+  add_widget_to_page(page, TYPE=13, script_id, origX, origY); op 0x10
+  set_active_page.
+- The redraw driver (0x08059C40) polls the active-page global, and on change calls
+  0x08063BAC -> 0x08063A54 (mark/context pass) + draw_page (0x08063304). draw_page
+  dispatches slot type 13 -> draw_script (0x08065508), which sets origX/origY,
+  lua_getglobal "draw"/"__ARG", lua_pcall -> our draw() runs.
+
+The ONLY remaining gap: draw_rect (0x0805342C) fails at its context resolver
+0x08066480, which looks up the CURRENT widget draw-context in a DIFFERENT
+hashtable (root 0x2000F36C) than op 0x11 populates (0x2000F35C). Neither
+create_widget (0x00), bind (0x3a), op 0x11, nor the kitchen-sink combination
+satisfied it -- draw_rect keeps returning its skip code. LEDs work because
+led_control_set_level_midi needs no draw-context; draw_rect needs a per-widget
+clip/target context set up during a full firmware page render that our
+op-constructed page does not reproduce.
+
+Status: the protocol is fully unlocked and code execution on the device is proven.
+The rectangle specifically is gated behind draw_rect's clip/target context (the
+0x2000F36C table + geometry), the single most intricate layer, which has resisted
+static construction. This is precisely what one VIP capture (a correct page render
+in motion) would resolve directly.
+
 ## Approach
 
 Ranked by leverage, given VIP is Windows/macOS only and this host is Ubuntu LTS:

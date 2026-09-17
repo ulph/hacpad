@@ -47,7 +47,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slot = g("SLOT", 0) as u8;
     let attach_b = g("AB", 0) as u8;
 
-    let chunk = b"function draw(a) draw_rect(0,0,480,272,0xffff0000) end";
+    // DIAGNOSTIC mode (DIAG=led): draw() lights LEDs instead of drawing pixels,
+    // to test whether draw() is being called at all (LEDs don't depend on the
+    // draw target/clip). Otherwise the normal red-fill + self-remark.
+    let chunk_s = if std::env::var("DIAG").as_deref() == Ok("led") {
+        "function draw(a) for i=0,127 do led_control_set_level_midi(i,127) end \
+         lua_widget_make_dirty(13,".to_string() + &script.to_string() + ") end"
+    } else {
+        format!("function draw(a) draw_rect(0,0,480,272,0xffff0000) \
+                 lua_widget_make_dirty(13,{script}) end")
+    };
+    let chunk = chunk_s.as_bytes();
 
     // Simplified recipe: a slot of TYPE 7 references a Lua script directly by id
     // (render dispatch 0x80639FC: type 7 -> scriptTbl[slot[2]]). No separate
@@ -59,6 +69,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut steps: Vec<(&str, Vec<u8>)> = Vec::new();
     steps.push(("create_page", frame(0x0d, &[page, 1])));
+    if g("WIDGET", 1) == 1 {
+        steps.push(("create_widget", frame(0x00, &[u14(wid)[0], u14(wid)[1], wtype_a, wtype_b])));
+    }
     steps.push(("create_slot", frame(0x39, &u14(script))));
     {
         let mut p = Vec::new();
@@ -66,6 +79,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         p.extend_from_slice(&u14(chunk.len() as u16));
         p.extend_from_slice(&pack(chunk));
         steps.push(("load", frame(0x3b, &p)));
+    }
+    // bind (op 0x3a): registers a widget context in the 0x2000F36C table that
+    // draw_rect's resolver (0x8066480) reads. key {BF, script}.
+    if g("BIND", 1) == 1 {
+        steps.push(("bind(0x3a)", frame(0x3a, &[u14(wid)[0], u14(wid)[1], bind_flag, u14(script)[0], u14(script)[1]])));
     }
     let mut e = vec![page, etype];
     e.extend_from_slice(&u14(f1));
